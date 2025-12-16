@@ -252,7 +252,6 @@ class MbOnPolicyRunner:
         self._cbf_total_correction: float = 0.0    # 累计动作修正量
         self._cbf_max_barrier: float = 0.0         # 最大barrier值
         self._cbf_call_count: int = 0              # CBF QP求解调用次数
-        self._cbf_skip_count: int = 0              # CBF预检查跳过次数（优化效果统计）
 
         # normalization of returns
         self.alg.init_storage(
@@ -280,7 +279,6 @@ class MbOnPolicyRunner:
     # 3.0:  最近障碍物 < 1.0m 时介入
     # 5.7:  最近障碍物 < 0.5m 时介入 → 激进
     CBF_SAFETY_THRESHOLD = 0.2
-    CBF_PRE_CHECK_RATIO = 0.3  # 预检查比例
     
     def _normalize_lidar_in_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """对 obs 中的 lidar 部分进行归一化（原地修改后返回副本）。
@@ -618,7 +616,6 @@ class MbOnPolicyRunner:
             self._cbf_total_correction = 0.0
             self._cbf_max_barrier = 0.0
             self._cbf_call_count = 0
-            self._cbf_skip_count = 0
             # rollout
             # Important: use no_grad (not inference_mode) so that tensors stored in
             # rollout can still be used later in autograd during PPO.update.
@@ -693,33 +690,19 @@ class MbOnPolicyRunner:
                         and (not warmup_active)  # 预热期间跳过CBF
                     )
                     if cbf_enabled:
-                        # 快速预检查：先判断当前状态是否接近危险区域
-                        # 只有当前 barrier cost 超过一定阈值时才调用完整 CBF
-                        # 这样可以跳过大部分安全情况，大幅减少计算量
-                        with torch.no_grad():
-                            # 使用原始 obs，CBF 内部会归一化 lidar
-                            obs_real_raw = obs[:self.num_envs_real]
-                            current_lidar = self._extract_lidar(obs_real_raw)
-                            current_barrier = self._compute_lidar_barrier_cost(current_lidar)
-                            # 预警阈值：使用类常量
-                            # 当前 barrier > 预警线 时才调用 CBF（给足够的反应空间）
-                            needs_cbf = current_barrier.max().item() > (self.CBF_SAFETY_THRESHOLD * self.CBF_PRE_CHECK_RATIO)
-                        
-                        if needs_cbf:
-                            if self.use_incremental_actions:
-                                # MB: In incremental mode, CBF optimizes delta (d_real)
-                                # 使用原始 obs 调用 CBF（CBF 内部会归一化 lidar）
-                                d_safe = self._solve_cbf_qp(obs_real_raw, d_real)
-                                # Update accumulator: new_accum = (current_accum - d_nom) + d_safe
-                                if self._real_accum_actions is not None:
-                                    self._real_accum_actions = self._real_accum_actions - d_real + d_safe
-                                    a_real = self._real_accum_actions.detach()
-                            else:
-                                a_real = self._solve_cbf_qp(obs_real_raw, a_real)
-                                if self.use_incremental_actions:
-                                    self._real_accum_actions = a_real.detach()
+                        # 每次都调用 CBF（最初设计，无预检查）
+                        obs_real_raw = obs[:self.num_envs_real]
+                        if self.use_incremental_actions:
+                            # MB: In incremental mode, CBF optimizes delta (d_real)
+                            d_safe = self._solve_cbf_qp(obs_real_raw, d_real)
+                            # Update accumulator: new_accum = (current_accum - d_nom) + d_safe
+                            if self._real_accum_actions is not None:
+                                self._real_accum_actions = self._real_accum_actions - d_real + d_safe
+                                a_real = self._real_accum_actions.detach()
                         else:
-                            self._cbf_skip_count += 1  # 预检查通过，跳过CBF
+                            a_real = self._solve_cbf_qp(obs_real_raw, a_real)
+                            if self.use_incremental_actions:
+                                self._real_accum_actions = a_real.detach()
                     # ----------------------------------------------------------------------
 
                     obs_real, rew_real, dones_real, extras_real = self.env.step(a_real.to(self.env.device))
@@ -1181,15 +1164,10 @@ class MbOnPolicyRunner:
                     self.writer.add_scalar("MB/stability_coef", self.stability_coef, locs["it"])  # type: ignore[attr-defined]
                 # CBF-specific scalars
                 if self.use_cbf:
-                    total_checks = self._cbf_call_count + self._cbf_skip_count
                     self.writer.add_scalar("CBF/trigger_count", self._cbf_trigger_count, locs["it"])  # type: ignore[attr-defined]
                     self.writer.add_scalar("CBF/total_violations", self._cbf_total_violations, locs["it"])  # type: ignore[attr-defined]
                     self.writer.add_scalar("CBF/max_barrier", self._cbf_max_barrier, locs["it"])  # type: ignore[attr-defined]
                     self.writer.add_scalar("CBF/qp_calls", self._cbf_call_count, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/skip_count", self._cbf_skip_count, locs["it"])  # type: ignore[attr-defined]
-                    if total_checks > 0:
-                        skip_rate = self._cbf_skip_count / total_checks
-                        self.writer.add_scalar("CBF/skip_rate", skip_rate, locs["it"])  # type: ignore[attr-defined]
                     if self._cbf_trigger_count > 0:
                         avg_correction = self._cbf_total_correction / self._cbf_trigger_count
                         self.writer.add_scalar("CBF/avg_correction", avg_correction, locs["it"])  # type: ignore[attr-defined]
@@ -1222,10 +1200,6 @@ class MbOnPolicyRunner:
                 log_string += f"""{'MB dyn last loss:':>{pad}} {self._last_dyn_loss:.4f}\n"""
             # CBF-specific prints
             if self.use_cbf:
-                total_checks = self._cbf_call_count + self._cbf_skip_count
-                if total_checks > 0:
-                    skip_rate = self._cbf_skip_count / total_checks
-                    log_string += f"""{'CBF skip rate:':>{pad}} {skip_rate:.1%} ({self._cbf_skip_count}/{total_checks} skipped)\n"""
                 if self._cbf_call_count > 0:
                     cbf_trigger_rate = self._cbf_trigger_count / self._cbf_call_count
                     log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({self._cbf_trigger_count}/{self._cbf_call_count} triggered)\n"""
@@ -1248,10 +1222,6 @@ class MbOnPolicyRunner:
                 log_string += f"""{'MB dyn last loss:':>{pad}} {self._last_dyn_loss:.4f}\n"""
             # CBF-specific prints
             if self.use_cbf:
-                total_checks = self._cbf_call_count + self._cbf_skip_count
-                if total_checks > 0:
-                    skip_rate = self._cbf_skip_count / total_checks
-                    log_string += f"""{'CBF skip rate:':>{pad}} {skip_rate:.1%} ({self._cbf_skip_count}/{total_checks} skipped)\n"""
                 if self._cbf_call_count > 0:
                     cbf_trigger_rate = self._cbf_trigger_count / self._cbf_call_count
                     log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({self._cbf_trigger_count}/{self._cbf_call_count} triggered)\n"""
