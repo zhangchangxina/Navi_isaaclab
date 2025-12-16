@@ -309,11 +309,11 @@ class MbOnPolicyRunner:
     def _compute_lidar_barrier_cost(self, obs_lidar: torch.Tensor, epsilon: float = 0.05, clip_max: float = 20.0) -> torch.Tensor:
         """
         Compute Barrier Function cost based on Lidar data (Inverse Barrier).
-        B(x) = max(1/(x + epsilon) - 1/(1 + epsilon))
+        B(x) = mean(1/(x + epsilon) - 1/(1 + epsilon))
         
         Note: obs_lidar 是原始 lidar 数据 [0, 5] 米，内部进行归一化
         
-        使用 max 模式：取所有射线中最危险的那根，对单点障碍物更敏感
+        使用 mean 模式：所有射线的平均危险度（最初设计）
         """
         # 内部归一化：[0, 5] 米 -> [0, 1]
         dist = torch.clamp(obs_lidar / self.LIDAR_MAX_RANGE, min=1e-6, max=1.0)
@@ -325,9 +325,8 @@ class MbOnPolicyRunner:
         offset = 1.0 / (1.0 + epsilon)
         barrier_cost = barrier_raw - offset
         
-        # Max over all rays: 取最危险的射线作为 barrier value
-        # 这样单个障碍物就能触发 CBF，比 mean 更敏感
-        total_cost, _ = torch.max(barrier_cost, dim=-1)
+        # Mean over all rays: 所有射线的平均危险度（最初设计）
+        total_cost = torch.mean(barrier_cost, dim=-1)
         
         # Clip to prevent gradient explosion
         total_cost = torch.clamp(total_cost, max=clip_max)
