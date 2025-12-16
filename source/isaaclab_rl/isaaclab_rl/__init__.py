@@ -16,4 +16,11 @@ All wrappers work similar to the :class:`gymnasium.Wrapper` class. Using a wrapp
 the initialized environment instance to the wrapper constructor. However, since learning frameworks
 expect different input and output data structures, their wrapper classes are not compatible with each other.
 Thus, they should always be used in conjunction with the respective learning framework.
+
+Supported frameworks:
+    - RSL-RL (PPO)
+    - RSL-RL MBPO (Model-Based Policy Optimization with SAC)
+    - RL-Games
+    - Stable-Baselines3
+    - SKRL
 """

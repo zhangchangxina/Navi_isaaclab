@@ -133,6 +133,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     # The Ray Tune workflow extracts experiment name using the logging line below, hence, do not change it (see PR #2346, comment-2819298849)
     print(f"Exact experiment name requested from command line: {log_dir}")
+    # ensure run_name includes algo tag
+    try:
+        _algo_tag = "ppo"
+        if getattr(agent_cfg, "run_name", None):
+            if _algo_tag not in str(agent_cfg.run_name):
+                agent_cfg.run_name = f"{agent_cfg.run_name}_{_algo_tag}"
+        else:
+            agent_cfg.run_name = _algo_tag
+    except Exception:
+        pass
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)

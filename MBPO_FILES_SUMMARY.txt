@@ -1,0 +1,84 @@
+========================================
+RSL-RL Style MBPO Implementation
+创建的文件清单
+========================================
+
+一、训练脚本目录 (scripts/reinforcement_learning/rsl_rl_mbpo/)
+----------------------------------------------------------------
+1. __init__.py                    - 包初始化文件
+2. cli_args.py                    - 命令行参数处理
+3. train.py                       - 主训练脚本
+4. play.py                        - 模型测试/播放脚本
+5. example_config.py              - 配置示例
+6. README.md                      - 详细使用文档
+
+二、核心库目录 (source/isaaclab_rl/isaaclab_rl/rsl_rl_mbpo/)
+----------------------------------------------------------------
+1. __init__.py                    - 模块导出
+2. mbpo_cfg.py                    - 配置类定义 (RslRlMBPORunnerCfg等)
+3. vecenv_wrapper.py              - 环境包装器 (RslRlMBPOVecEnvWrapper)
+4. runner.py                      - MBPO训练器 (MBPORunner)
+
+三、辅助文件 (根目录)
+----------------------------------------------------------------
+1. run_mbpo_train.sh              - 训练启动脚本
+2. MBPO_SETUP.md                  - 完整设置和使用指南
+3. MBPO_FILES_SUMMARY.txt         - 本文件
+
+四、修改的文件
+----------------------------------------------------------------
+1. source/isaaclab_rl/isaaclab_rl/__init__.py  - 添加了 MBPO 框架说明
+
+========================================
+文件功能说明
+========================================
+
+核心功能实现:
+- runner.py: 实现了完整的 MBPO 训练循环，包括数据收集、动力学模型训练、SAC更新
+- vecenv_wrapper.py: 适配 Isaac Lab 环境到 MBPO 使用的 numpy 接口
+- mbpo_cfg.py: 定义了所有配置类，使用 @configclass 装饰器
+
+训练脚本:
+- train.py: 主训练入口，类似 RSL-RL 的训练脚本结构
+- play.py: 测试训练好的策略
+- cli_args.py: 统一的命令行参数处理
+
+配置和文档:
+- example_config.py: 展示如何为不同任务创建 MBPO 配置
+- README.md: 详细的使用文档、参数说明、故障排除
+- MBPO_SETUP.md: 中文设置指南和快速开始
+
+========================================
+使用流程
+========================================
+
+1. 基本训练:
+   python scripts/reinforcement_learning/rsl_rl_mbpo/train.py --task <TASK> --num_envs 4096
+
+2. 使用脚本:
+   ./run_mbpo_train.sh
+
+3. 测试模型:
+   python scripts/reinforcement_learning/rsl_rl_mbpo/play.py --task <TASK> --checkpoint <PATH>
+
+========================================
+与原始 train_mbpo.py 的关系
+========================================
+
+本实现是对原始 scripts/incremental_mbpo/train_mbpo.py 的重构:
+- 保留了所有核心算法 (SAC, 增量动力学模型, 稳定性奖励等)
+- 采用了 RSL-RL 的模块化结构
+- 更易于维护和扩展
+- 提供了更好的配置管理
+
+========================================
+下一步
+========================================
+
+1. 查看 MBPO_SETUP.md 获取详细的使用指南
+2. 查看 scripts/reinforcement_learning/rsl_rl_mbpo/README.md 获取参数说明
+3. 参考 example_config.py 为你的任务创建配置
+4. 运行 run_mbpo_train.sh 开始训练!
+
+========================================
+
