@@ -273,6 +273,15 @@ class MbOnPolicyRunner:
     # Lidar 归一化常量（与环境 clip=(0,5) 对应）
     LIDAR_MAX_RANGE = 5.0
     
+    # CBF 安全阈值（统一定义）
+    # 0.2:  最近障碍物 < 4.0m 时介入 → 最保守（最初设计）
+    # 1.5:  最近障碍物 < 2.0m 时介入
+    # 2.0:  最近障碍物 < 1.5m 时介入
+    # 3.0:  最近障碍物 < 1.0m 时介入
+    # 5.7:  最近障碍物 < 0.5m 时介入 → 激进
+    CBF_SAFETY_THRESHOLD = 0.2
+    CBF_PRE_CHECK_RATIO = 0.3  # 预检查比例
+    
     def _normalize_lidar_in_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """对 obs 中的 lidar 部分进行归一化（原地修改后返回副本）。
         
@@ -346,21 +355,8 @@ class MbOnPolicyRunner:
         # Hyperparameters
         SQP_ITER = 3            # Number of linearization steps
         
-        # SAFETY_THRESHOLD (h): 无量纲势能阈值（max 模式）
-        # 归一化距离 x 与 Cost 对应关系（lidar归一化：0~5m → 0~1）：
-        #   x=1.0 (5.0m) → cost=0.0
-        #   x=0.5 (2.5m) → cost=0.87
-        #   x=0.3 (1.5m) → cost=1.91
-        #   x=0.2 (1.0m) → cost=3.05
-        #   x=0.1 (0.5m) → cost=5.71
-        # 阈值越高，CBF介入越早（越保守）。
-        # 0.87: 最近障碍物 < 2.5m 时介入
-        # 0.2:  最近障碍物 < 4.0m 时介入 → 最保守
-        # 1.5:  最近障碍物 < 2.0m 时介入
-        # 2.0:  最近障碍物 < 1.5m 时介入
-        # 3.0:  最近障碍物 < 1.0m 时介入
-        # 5.7:  最近障碍物 < 0.5m 时介入 → 激进
-        SAFETY_THRESHOLD = 0.2  # 最初设计：约 4m 触发  
+        # 使用类常量 self.CBF_SAFETY_THRESHOLD（定义在类顶部）
+        SAFETY_THRESHOLD = self.CBF_SAFETY_THRESHOLD  
         
         # Enable gradient computation even if called from no_grad context
         self._cbf_call_count += 1
@@ -706,11 +702,9 @@ class MbOnPolicyRunner:
                             obs_real_raw = obs[:self.num_envs_real]
                             current_lidar = self._extract_lidar(obs_real_raw)
                             current_barrier = self._compute_lidar_barrier_cost(current_lidar)
-                            # 预警阈值：使用 SAFETY_THRESHOLD 的比例作为预警线
+                            # 预警阈值：使用类常量
                             # 当前 barrier > 预警线 时才调用 CBF（给足够的反应空间）
-                            CBF_SAFETY_THRESHOLD = 0.2  # 与 _solve_cbf_qp 中的 SAFETY_THRESHOLD 保持一致
-                            PRE_CHECK_RATIO = 0.3  # 30% 的阈值就开始预警
-                            needs_cbf = current_barrier.max().item() > (CBF_SAFETY_THRESHOLD * PRE_CHECK_RATIO)
+                            needs_cbf = current_barrier.max().item() > (self.CBF_SAFETY_THRESHOLD * self.CBF_PRE_CHECK_RATIO)
                         
                         if needs_cbf:
                             if self.use_incremental_actions:
