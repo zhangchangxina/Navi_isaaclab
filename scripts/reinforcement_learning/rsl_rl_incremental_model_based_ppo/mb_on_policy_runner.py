@@ -270,50 +270,19 @@ class MbOnPolicyRunner:
         self._dbg_every = int(_dbg_every) if _dbg_every.isdigit() else 200
 
     # ----- internals -----
-    # 归一化常量（UAV 配置）
-    # 观测结构: [base_lin_vel(3), base_ang_vel(3), projected_gravity(3), pose_command(3), actions(3), lidar(N)]
-    OBS_SCALES = {
-        'base_lin_vel': 2.0,      # [-2, 2] m/s → [-1, 1]
-        'base_ang_vel': 2.0,      # [-2, 2] rad/s → [-1, 1]
-        'projected_gravity': 1.0, # 已是单位向量 [-1, 1]
-        'pose_command': 50.0,     # [-50, 50] m → [-1, 1]
-        'actions': 2.0,           # [-2, 2] (scaled) → [-1, 1]
-        'lidar': 5.0,             # [0, 5] m → [0, 1]
-    }
-    # 动作归一化（增量动作的范围较小，但保持一致性）
-    ACTION_SCALE = 2.0  # 与 UAVBodyActionCfg.scale 对应
+    # Lidar 归一化常量（与环境 clip=(0,5) 对应）
+    LIDAR_MAX_RANGE = 5.0
     
-    def _normalize_obs(self, obs: torch.Tensor) -> torch.Tensor:
-        """对所有观测进行固定归一化，返回副本。
+    def _normalize_lidar_in_obs(self, obs: torch.Tensor) -> torch.Tensor:
+        """对 obs 中的 lidar 部分进行归一化（原地修改后返回副本）。
         
-        观测结构 (UAV): [base_lin_vel(3), base_ang_vel(3), projected_gravity(3), 
-                        pose_command(3), actions(3), lidar(N)]
-        总共: 15 + lidar_dim
+        归一化公式：lidar_normalized = lidar / LIDAR_MAX_RANGE
+        这样 lidar 从 [0, 5] 米变为 [0, 1]
         """
         obs_norm = obs.clone()
-        # base_lin_vel: dims 0:3
-        obs_norm[:, 0:3] /= self.OBS_SCALES['base_lin_vel']
-        # base_ang_vel: dims 3:6
-        obs_norm[:, 3:6] /= self.OBS_SCALES['base_ang_vel']
-        # projected_gravity: dims 6:9 (已归一化，不处理)
-        # pose_command: dims 9:12
-        obs_norm[:, 9:12] /= self.OBS_SCALES['pose_command']
-        # actions: dims 12:15
-        obs_norm[:, 12:15] /= self.OBS_SCALES['actions']
-        # lidar: dims 15:end
-        obs_norm[:, 15:] /= self.OBS_SCALES['lidar']
+        start_idx = -self.lidar_dim
+        obs_norm[:, start_idx:] = obs_norm[:, start_idx:] / self.LIDAR_MAX_RANGE
         return obs_norm
-    
-    def _normalize_action(self, action: torch.Tensor) -> torch.Tensor:
-        """对动作进行归一化（用于 Dynamics 训练）。
-        
-        增量动作范围取决于加速度限制，归一化到约 [-1, 1]
-        """
-        return action / self.ACTION_SCALE
-    
-    def _denormalize_action(self, action_norm: torch.Tensor) -> torch.Tensor:
-        """反归一化动作（从 Dynamics 预测后恢复）。"""
-        return action_norm * self.ACTION_SCALE
     
     def _extract_lidar(self, obs: torch.Tensor) -> torch.Tensor:
         """Extract Lidar observations from the full observation tensor.
@@ -536,16 +505,16 @@ class MbOnPolicyRunner:
                     self._last_dyn_loss = total_loss_sum / float(total_loss_count)
 
     def _init_virtual_states(self, real_obs: torch.Tensor):
-        # real_obs: (N_real, obs_dim) - 原始观测，需要归一化
+        # real_obs: (N_real, obs_dim)
         if self._virt_states is None:
             if self.mb_init_from_buffer and len(self._replay) > 0:
-                # sample states from buffer（已归一化）
+                # sample states from buffer（已归一化 lidar）
                 idx = torch.randint(low=0, high=len(self._replay), size=(self.num_envs_virt,))
                 states = torch.stack([self._replay[int(i)][0] for i in idx]).to(self.device)
                 self._virt_states = states
             else:
-                # 从 real_obs 初始化时需要归一化
-                real_obs_norm = self._normalize_obs(real_obs)
+                # 从 real_obs 初始化时需要归一化 lidar
+                real_obs_norm = self._normalize_lidar_in_obs(real_obs)
                 take = min(self.num_envs_virt, real_obs_norm.shape[0])
                 pad = self.num_envs_virt - take
                 if pad > 0:
@@ -734,8 +703,8 @@ class MbOnPolicyRunner:
                         # 只有当前 barrier cost 超过一定阈值时才调用完整 CBF
                         # 这样可以跳过大部分安全情况，大幅减少计算量
                         with torch.no_grad():
-                            # 完全归一化 obs（与 Dynamics 训练数据一致）
-                            obs_real_norm = self._normalize_obs(obs[:self.num_envs_real])
+                            # 统一归一化：先对 obs 中的 lidar 归一化
+                            obs_real_norm = self._normalize_lidar_in_obs(obs[:self.num_envs_real])
                             current_lidar = self._extract_lidar(obs_real_norm)
                             current_barrier = self._compute_lidar_barrier_cost(current_lidar)
                             # 预警阈值：使用 SAFETY_THRESHOLD 的比例作为预警线
@@ -747,19 +716,14 @@ class MbOnPolicyRunner:
                         if needs_cbf:
                             if self.use_incremental_actions:
                                 # MB: In incremental mode, CBF optimizes delta (d_real)
-                                # 归一化动作后调用 CBF（与 Dynamics 训练数据一致）
-                                d_real_norm = self._normalize_action(d_real)
-                                d_safe_norm = self._solve_cbf_qp(obs_real_norm, d_real_norm)
-                                # 反归一化得到实际动作
-                                d_safe = self._denormalize_action(d_safe_norm)
+                                # 使用归一化后的 obs 调用 CBF（与 Dynamics 训练数据一致）
+                                d_safe = self._solve_cbf_qp(obs_real_norm, d_real)
                                 # Update accumulator: new_accum = (current_accum - d_nom) + d_safe
                                 if self._real_accum_actions is not None:
                                     self._real_accum_actions = self._real_accum_actions - d_real + d_safe
                                     a_real = self._real_accum_actions.detach()
                             else:
-                                a_real_norm = self._normalize_action(a_real)
-                                a_safe_norm = self._solve_cbf_qp(obs_real_norm, a_real_norm)
-                                a_real = self._denormalize_action(a_safe_norm)
+                                a_real = self._solve_cbf_qp(obs_real_norm, a_real)
                                 if self.use_incremental_actions:
                                     self._real_accum_actions = a_real.detach()
                         else:
@@ -774,23 +738,22 @@ class MbOnPolicyRunner:
                     # update replay with last real transition (approximate: we need last obs, actions)
                     # Here we use current obs for state and obs_real for next_state
                     # IMPORTANT: Always store delta actions for dynamics model consistency
-                    # IMPORTANT: 存储完全归一化后的 obs 和 action，保持 Dynamics 和 CBF 的一致性
+                    # IMPORTANT: 存储归一化后的 lidar obs，保持 Dynamics 和 CBF 的一致性
                     self._lazy_init_dyn(self.num_obs, self.env.num_actions)
                     with torch.no_grad():
-                        # 对所有观测进行归一化后存储
-                        s_real = self._normalize_obs(obs[:self.num_envs_real].detach())
+                        # 对 lidar 部分进行归一化后存储
+                        s_real = self._normalize_lidar_in_obs(obs[:self.num_envs_real].detach())
                         if self.use_incremental_actions:
-                            # policy outputs delta directly，归一化动作
-                            a_store = self._normalize_action(d_real.detach())
+                            # policy outputs delta directly
+                            a_store = d_real.detach()
                         else:
                             # compute delta from absolute actions: delta = a_t - a_{t-1}
                             if self._prev_real_actions is None:
                                 self._prev_real_actions = torch.zeros_like(a_real)
-                            delta_action = (a_real - self._prev_real_actions).detach()
-                            a_store = self._normalize_action(delta_action)
+                            a_store = (a_real - self._prev_real_actions).detach()
                             self._prev_real_actions = a_real.detach().clone()
                         r_store = rew_real.detach()
-                        ns_real = self._normalize_obs(obs_real.detach())
+                        ns_real = self._normalize_lidar_in_obs(obs_real.detach())
                         done_real_f = (dones_real > 0).float()
                     self._append_replay(s_real, a_store, r_store, ns_real, done_real_f)
 
@@ -804,8 +767,8 @@ class MbOnPolicyRunner:
                         and (not warmup_active)
                     )
                     if use_dyn:
-                        # for rollouts, always feed normalized delta actions (model is trained on normalized data)
-                        m_input_actions = self._normalize_action(a_virt_input)
+                        # for rollouts, always feed delta actions (model is trained on delta)
+                        m_input_actions = a_virt_input
                         vs_in = self._virt_states if self._virt_states is not None else obs[:0]
                         preds = [m(vs_in, m_input_actions) for m in self._dyn_models]
                         ns_stack = torch.stack([p[0] for p in preds], dim=0)
@@ -926,11 +889,11 @@ class MbOnPolicyRunner:
 
                     # reset/fold virtual states on done and reset accumulators if incremental
                     if include_virtual_step and ns_virt is not None:
-                        # for done virtual envs, reset to normalized real slice
+                        # for done virtual envs, reset to real slice (with lidar normalized)
                         done_mask = (d_virt > 0).view(-1)
                         if done_mask.any():
-                            # 归一化 real obs 后用于 reset
-                            reset_src = self._normalize_obs(obs_real[: self.num_envs_virt])
+                            # 归一化 lidar 后用于 reset
+                            reset_src = self._normalize_lidar_in_obs(obs_real[: self.num_envs_virt])
                             ns_virt = torch.where(done_mask.unsqueeze(-1), reset_src, ns_virt)
                             # reset action trackers for done virtual envs
                             if self.use_incremental_actions and self._virt_accum_actions is not None:
