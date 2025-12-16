@@ -360,7 +360,7 @@ class MbOnPolicyRunner:
         # 2.0:  最近障碍物 < 1.5m 时介入
         # 3.0:  最近障碍物 < 1.0m 时介入
         # 5.7:  最近障碍物 < 0.5m 时介入 → 激进
-        SAFETY_THRESHOLD = 1.5  
+        SAFETY_THRESHOLD = 0.2  # 最初设计：约 4m 触发  
         
         # Enable gradient computation even if called from no_grad context
         self._cbf_call_count += 1
@@ -708,7 +708,7 @@ class MbOnPolicyRunner:
                             current_barrier = self._compute_lidar_barrier_cost(current_lidar)
                             # 预警阈值：使用 SAFETY_THRESHOLD 的比例作为预警线
                             # 当前 barrier > 预警线 时才调用 CBF（给足够的反应空间）
-                            CBF_SAFETY_THRESHOLD = 1.5  # 与 _solve_cbf_qp 中的 SAFETY_THRESHOLD 保持一致
+                            CBF_SAFETY_THRESHOLD = 0.2  # 与 _solve_cbf_qp 中的 SAFETY_THRESHOLD 保持一致
                             PRE_CHECK_RATIO = 0.3  # 30% 的阈值就开始预警
                             needs_cbf = current_barrier.max().item() > (CBF_SAFETY_THRESHOLD * PRE_CHECK_RATIO)
                         
