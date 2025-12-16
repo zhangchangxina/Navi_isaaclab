@@ -12,7 +12,7 @@ from isaaclab.sim import converters, schemas
 from isaaclab.sim.spawners import materials
 from isaaclab.sim.spawners.spawner_cfg import DeformableObjectSpawnerCfg, RigidObjectSpawnerCfg, SpawnerCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, LOCAL_ASSET_DIR
 
 from . import from_files
 
@@ -143,7 +143,9 @@ class GroundPlaneCfg(SpawnerCfg):
 
     func: Callable = from_files.spawn_ground_plane
 
-    usd_path: str = f"{ISAAC_NUCLEUS_DIR}/Environments/Grid/default_environment.usd"
+    # usd_path: str = f"{ISAAC_NUCLEUS_DIR}/Environments/Grid/default_environment.usd"
+    usd_path: str = f"{LOCAL_ASSET_DIR}/Environments/Grid/default_environment.usd"
+
     """Path to the USD file to spawn asset from. Defaults to the grid-world ground plane."""
 
     color: tuple[float, float, float] | None = (0.0, 0.0, 0.0)

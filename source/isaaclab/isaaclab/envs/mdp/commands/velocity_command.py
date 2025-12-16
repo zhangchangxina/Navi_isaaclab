@@ -170,7 +170,8 @@ class UniformVelocityCommand(CommandTerm):
                 # -- current
                 self.current_vel_visualizer = VisualizationMarkers(self.cfg.current_vel_visualizer_cfg)
             # set their visibility to true
-            self.goal_vel_visualizer.set_visibility(True)
+            # self.goal_vel_visualizer.set_visibility(True)
+            self.goal_vel_visualizer.set_visibility(False)
             self.current_vel_visualizer.set_visibility(True)
         else:
             if hasattr(self, "goal_vel_visualizer"):

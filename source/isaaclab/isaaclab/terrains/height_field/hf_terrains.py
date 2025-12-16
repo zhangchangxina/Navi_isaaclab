@@ -434,3 +434,177 @@ def stepping_stones_terrain(difficulty: float, cfg: hf_terrains_cfg.HfSteppingSt
     hf_raw[x1:x2, y1:y2] = 0
     # round off the heights to the nearest vertical step
     return np.rint(hf_raw).astype(np.int16)
+
+
+@height_field_to_mesh
+def forest_rect_terrain(difficulty: float, cfg: hf_terrains_cfg.HfForestTerrainCfg) -> np.ndarray:
+    """Generate a terrain with randomly generated obstacles as pillars with positive and negative heights.
+
+    The terrain is a flat platform at the center of the terrain with randomly generated obstacles as pillars
+    with positive and negative height. The obstacles are randomly generated cuboids with a random width and
+    height. They are placed randomly on the terrain with a minimum distance of :obj:`cfg.platform_width`
+    from the center of the terrain.
+
+    .. image:: ../../_static/terrains/height_field/discrete_obstacles_terrain.jpg
+       :width: 40%
+       :align: center
+
+    Args:
+        difficulty: The difficulty of the terrain. This is a value between 0 and 1.
+        cfg: The configuration for the terrain.
+
+    Returns:
+        The height field of the terrain as a 2D numpy array with discretized heights.
+        The shape of the array is (width, length), where width and length are the number of points
+        along the x and y axis, respectively.
+    """
+    # resolve terrain configuration
+    obs_height = cfg.obstacle_height_range[0] + difficulty * (
+        cfg.obstacle_height_range[1] - cfg.obstacle_height_range[0]
+    )
+
+    # switch parameters to discrete units
+    # -- terrain
+    width_pixels = int(cfg.size[0] / cfg.horizontal_scale)
+    length_pixels = int(cfg.size[1] / cfg.horizontal_scale)
+    # -- obstacles
+    obs_height = int(obs_height / cfg.vertical_scale)
+    obs_width_min = int(cfg.obstacle_width_range[0] / cfg.horizontal_scale)
+    obs_width_max = int(cfg.obstacle_width_range[1] / cfg.horizontal_scale)
+    # -- center of the terrain
+    platform_width = int(cfg.platform_width / cfg.horizontal_scale)
+
+    # create discrete ranges for the obstacles
+    # -- shape
+    obs_width_range = np.arange(obs_width_min, obs_width_max, 4)
+    obs_length_range = np.arange(obs_width_min, obs_width_max, 4)
+    # -- position
+    obs_x_range = np.arange(0, width_pixels, 4)
+    obs_y_range = np.arange(0, length_pixels, 4)
+
+    # create a terrain with a flat platform at the center
+    hf_raw = np.zeros((width_pixels, length_pixels))
+    # generate the obstacles
+    for _ in range(cfg.num_obstacles):
+        # sample size
+        # height = np.random.choice(np.arange(1, obs_height, step=1))
+        height = obs_height
+
+        # if cfg.obstacle_height_mode == "choice":
+
+        #     height = np.random.choice([-obs_height, -obs_height // 2, obs_height // 2, obs_height])
+        # elif cfg.obstacle_height_mode == "fixed":
+        #     height = obs_height
+        # else:
+        #     raise ValueError(f"Unknown obstacle height mode '{cfg.obstacle_height_mode}'. Must be 'choice' or 'fixed'.")
+        width = int(np.random.choice(obs_width_range))
+        length = int(np.random.choice(obs_length_range))
+        # sample position
+        x_start = int(np.random.choice(obs_x_range))
+        y_start = int(np.random.choice(obs_y_range))
+        # clip start position to the terrain
+        if x_start + width > width_pixels:
+            x_start = width_pixels - width
+        if y_start + length > length_pixels:
+            y_start = length_pixels - length
+        # add to terrain
+        hf_raw[x_start : x_start + width, y_start : y_start + length] = height
+    # clip the terrain to the platform
+    x1 = (width_pixels - platform_width) // 2
+    x2 = (width_pixels + platform_width) // 2
+    y1 = (length_pixels - platform_width) // 2
+    y2 = (length_pixels + platform_width) // 2
+    hf_raw[x1:x2, y1:y2] = 0
+    # round off the heights to the nearest vertical step
+    return np.rint(hf_raw).astype(np.int16)
+
+
+
+
+@height_field_to_mesh
+def hf_forest_terrain(difficulty: float, cfg: hf_terrains_cfg.HfForestTerrainCfg) -> np.ndarray:
+    """Generate a terrain with randomly generated cylindrical obstacles.
+    
+    The terrain is a flat platform at the center of the terrain with randomly generated 
+    cylindrical obstacles. The obstacles are randomly placed with random radius and height.
+    They are placed randomly on the terrain with a minimum distance of :obj:`cfg.platform_width`
+    from the center of the terrain.
+
+    Args:
+        difficulty: The difficulty of the terrain. This is a value between 0 and 1.
+        cfg: The configuration for the terrain.
+
+    Returns:
+        The height field of the terrain as a 2D numpy array with discretized heights.
+        The shape of the array is (width, length), where width and length are the number of
+        points along the x and y axis, respectively.
+    """
+    # resolve terrain configuration
+    obs_height = cfg.obstacle_height_range[0] + difficulty * (
+        cfg.obstacle_height_range[1] - cfg.obstacle_height_range[0]
+    )
+
+    # switch parameters to discrete units
+    # -- terrain
+    width_pixels = int(cfg.size[0] / cfg.horizontal_scale)
+    length_pixels = int(cfg.size[1] / cfg.horizontal_scale)
+    # -- obstacles
+    # obs_height_pixels = int(obs_height / cfg.vertical_scale)
+
+    obs_height_min = int(cfg.obstacle_height_range[0] / cfg.vertical_scale) 
+    obs_height_max = int(cfg.obstacle_height_range[1] / cfg.vertical_scale) 
+
+    obs_radius_min = int(cfg.obstacle_radius_range[0] / cfg.horizontal_scale) 
+    obs_radius_max = int(cfg.obstacle_radius_range[1] / cfg.horizontal_scale) 
+    # -- center of the terrain
+    platform_width = int(cfg.platform_width / cfg.horizontal_scale)
+
+    # create discrete ranges for the obstacles
+    # -- shape
+    obs_height_range = np.arange(obs_height_min, obs_height_max, 2)
+    obs_radius_range = np.arange(obs_radius_min, obs_radius_max, 2)
+    # -- position
+    obs_x_range = np.arange(obs_radius_max, width_pixels - obs_radius_max, 4)
+    obs_y_range = np.arange(obs_radius_max, length_pixels - obs_radius_max, 4)
+
+    # create a terrain with a flat platform at the center
+    hf_raw = np.zeros((width_pixels, length_pixels))
+    
+    # generate the cylindrical obstacles
+    for _ in range(cfg.num_obstacles):
+        # sample size
+        height = int(np.random.choice(obs_height_range))
+        radius = int(np.random.choice(obs_radius_range))
+        
+        # sample position (center of cylinder)
+        x_center = int(np.random.choice(obs_x_range))
+        y_center = int(np.random.choice(obs_y_range))
+
+
+        
+        # ensure cylinder stays within bounds
+        x_min = max(0, x_center - radius)
+        x_max = min(width_pixels, x_center + radius)
+        y_min = max(0, y_center - radius)
+        y_max = min(length_pixels, y_center + radius)
+        
+        # create circular footprint
+        for x in range(x_min, x_max):
+            for y in range(y_min, y_max):
+                # check if point is inside circle
+                if (x - x_center)**2 + (y - y_center)**2 <= radius**2:
+                    hf_raw[x, y] = height
+    
+    # clip the terrain to the platform (clear center area)
+    x1 = (width_pixels - platform_width) // 2
+    x2 = (width_pixels + platform_width) // 2
+    y1 = (length_pixels - platform_width) // 2
+    y2 = (length_pixels + platform_width) // 2
+    hf_raw[x1:x2, y1:y2] = 0
+    
+    # round off the heights to the nearest vertical step
+    return np.rint(hf_raw).astype(np.int16)
+
+
+
+

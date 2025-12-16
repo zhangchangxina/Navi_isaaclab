@@ -1,0 +1,29 @@
+{
+    "version": "1.0",
+    "file_records": [
+        {
+            "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Turtlebot/turtlebot3_burger.usd",
+            "source_hash": "63e78ee176bd9b7ac987afa9781dfa639fae08ed",
+            "target_url": "./turtlebot3_burger.usd",
+            "target_hash": "ecf6b54330743993fa7976243348bd4d0220b9ff"
+        },
+        {
+            "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Turtlebot/configuration/turtlebot3_burger_base.usd",
+            "source_hash": "486bb4d1bb59295f7b1c564f6f73f09cf4436378",
+            "target_url": "./configuration/turtlebot3_burger_base.usd",
+            "target_hash": "aa5ee5b3a67f12f2c2dcdde6b5e3a23ca1a17cc8"
+        },
+        {
+            "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Turtlebot/configuration/turtlebot3_burger_physics.usd",
+            "source_hash": "fd5c810459c7bcedfb93918177118746a6173d4c",
+            "target_url": "./configuration/turtlebot3_burger_physics.usd",
+            "target_hash": "77fa79748a374fcec8858d87a81868ae64931461"
+        },
+        {
+            "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.5/Isaac/Robots/Turtlebot/configuration/turtlebot3_burger_sensor.usd",
+            "source_hash": "53e5480f10b5271b52e31709cc31cbac6317d690",
+            "target_url": "./configuration/turtlebot3_burger_sensor.usd",
+            "target_hash": "92586f605425ad1c9ba858749bea457de54d82d4"
+        }
+    ]
+}

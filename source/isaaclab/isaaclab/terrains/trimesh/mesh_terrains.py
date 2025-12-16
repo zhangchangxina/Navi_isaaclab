@@ -858,3 +858,42 @@ def repeated_objects_terrain(
     meshes_list.append(platform)
 
     return meshes_list, origin
+
+
+
+
+def forest_terrain(
+    difficulty: float, cfg: mesh_terrains_cfg.MeshForestTerrainCfg
+) -> tuple[list[trimesh.Trimesh], np.ndarray]:
+    # initialize list of meshes
+    meshes_list = list()
+    terrain_height = 0.1
+    platform_width = int(cfg.platform_width)
+
+    obs_x_range = (cfg.obstacle_radius_range[1], cfg.size[0] - cfg.obstacle_radius_range[1])
+    obs_y_range = (cfg.obstacle_radius_range[1], cfg.size[1] - cfg.obstacle_radius_range[1])
+
+    for _ in range(cfg.num_obstacles):
+        # sample size
+        height = np.random.uniform(*cfg.obstacle_height_range)
+        radius = np.random.uniform(*cfg.obstacle_radius_range)
+        
+        # sample position (center of cylinder)
+        x_center = np.random.uniform(*obs_x_range)
+        y_center = np.random.uniform(*obs_y_range)
+
+        object_mesh = make_cylinder(radius=radius, height=height, center=(x_center, y_center, height / 2))
+        meshes_list.append(object_mesh)
+
+    # Generate the ground
+    pos = (0.5 * cfg.size[0], 0.5 * cfg.size[1], -terrain_height / 2 - 0.1)
+
+    dim = (cfg.size[0], cfg.size[1], terrain_height)
+    ground = trimesh.creation.box(dim, trimesh.transformations.translation_matrix(pos))
+    meshes_list.append(ground)
+    origin = np.asarray([pos[0], pos[1], 0.0])
+
+    return meshes_list, origin
+
+
+

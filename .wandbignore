@@ -1,0 +1,80 @@
+# 阻止wandb上传模型文件
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.model
+*.weights
+*.bin
+*.safetensors
+
+# 阻止上传日志目录中的模型文件（实际存储位置）
+logs/**/*.pth
+logs/**/*.pt
+logs/**/*.ckpt
+logs/**/*.h5
+logs/**/*.hdf5
+logs/**/*.pkl
+logs/**/*.pickle
+logs/**/*.joblib
+logs/**/*.model
+logs/**/*.weights
+logs/**/*.bin
+logs/**/*.safetensors
+
+
+# 阻止上传检查点目录
+checkpoints/
+checkpoint/
+models/
+model/
+weights/
+weight/
+
+# 阻止上传大型数据文件
+*.npy
+*.npz
+*.csv
+*.json
+*.yaml
+*.yml
+*.txt
+*.log
+
+# 阻止上传临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 阻止上传IDE文件
+.vscode/
+.idea/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# 阻止上传git文件
+.git/
+.gitignore
+.gitattributes
+
+# 阻止上传其他大型文件
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z 

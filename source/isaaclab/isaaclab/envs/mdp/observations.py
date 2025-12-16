@@ -242,6 +242,24 @@ def height_scan(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg, offset: float 
     return sensor.data.pos_w[:, 2].unsqueeze(1) - sensor.data.ray_hits_w[..., 2] - offset
 
 
+def lidar_scan(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg, offset: float = 0.5) -> torch.Tensor:
+    """Height scan from the given sensor w.r.t. the sensor's frame.
+
+    The provided offset (Defaults to 0.5) is subtracted from the returned values.
+    """
+    # extract the used quantities (to enable type-hinting)
+    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
+    # height scan: height = sensor_height - hit_point_z - offset
+    depth = torch.norm(sensor.data.ray_hits_w[..., 0:2] - sensor.data.pos_w[:, 0:2].unsqueeze(1), dim=-1)
+
+    # optional, return the min distance and corresponding index
+    # min_value, min_index = torch.min(depth, keepdim=True, dim=-1)
+    # return torch.cat((min_value, min_index / sensor.num_rays),dim=1)
+
+    return depth
+
+
+
 def body_incoming_wrench(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Incoming spatial wrench on bodies of an articulation in the simulation world frame.
 
@@ -613,6 +631,38 @@ Commands.
 def generated_commands(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
     """The generated command from command term in the command manager with the given name."""
     return env.command_manager.get_command(command_name)
+
+
+def pose_command_position_only(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Extract only position from pose command, ignoring heading.
+    
+    Args:
+        env: The environment.
+        command_name: The name of the command to extract position from.
+        
+    Returns:
+        The position part of the pose command (x, y, z) without heading.
+        Shape is (num_envs, 3).
+    """
+    full_command = env.command_manager.get_command(command_name)
+    # 只返回位置部分 (前3维)，去掉朝向 (第4维)
+    return full_command[:, :3]
+
+
+def pose_command_position_2d(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
+    """Extract only 2D position from pose command for UGV navigation.
+    
+    Args:
+        env: The environment.
+        command_name: The name of the command to extract position from.
+        
+    Returns:
+        The 2D position part of the pose command (x, y) for UGV.
+        Shape is (num_envs, 2).
+    """
+    full_command = env.command_manager.get_command(command_name)
+    # 只返回2D位置部分 (前2维)，忽略高度和朝向
+    return full_command[:, :2]
 
 
 """

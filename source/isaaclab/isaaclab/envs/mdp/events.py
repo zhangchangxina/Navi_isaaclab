@@ -963,6 +963,7 @@ def reset_root_state_from_terrain(
     env_ids: torch.Tensor,
     pose_range: dict[str, tuple[float, float]],
     velocity_range: dict[str, tuple[float, float]],
+    offset_z: float,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ):
     """Reset the asset root state by sampling a random valid pose from the terrain.
@@ -1003,7 +1004,7 @@ def reset_root_state_from_terrain(
     # sample random valid poses
     ids = torch.randint(0, valid_positions.shape[2], size=(len(env_ids),), device=env.device)
     positions = valid_positions[terrain.terrain_levels[env_ids], terrain.terrain_types[env_ids], ids]
-    positions += asset.data.default_root_state[env_ids, :3]
+    positions += asset.data.default_root_state[env_ids, :3] + offset_z
 
     # sample random orientations
     range_list = [pose_range.get(key, (0.0, 0.0)) for key in ["roll", "pitch", "yaw"]]

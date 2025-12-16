@@ -212,6 +212,8 @@ class MeshRepeatedObjectsTerrainCfg(SubTerrainBaseCfg):
     platform_width: float = 1.0
     """The width of the cylindrical platform at the center of the terrain. Defaults to 1.0."""
 
+    platform_height: float = 1.0
+
     def __post_init__(self):
         if self.max_height_noise is not None:
             warnings.warn(
@@ -288,3 +290,22 @@ class MeshRepeatedCylindersTerrainCfg(MeshRepeatedObjectsTerrainCfg):
     """The box curriculum parameters at the start of the curriculum."""
     object_params_end: ObjectCfg = MISSING
     """The box curriculum parameters at the end of the curriculum."""
+
+
+@configclass
+class MeshForestTerrainCfg(SubTerrainBaseCfg):
+    """Configuration for a discrete obstacles height field terrain."""
+
+    function = mesh_terrains.forest_terrain
+
+    obstacle_height_range: tuple[float, float] = MISSING
+    """The minimum and maximum width of the obstacles (in m)."""
+    obstacle_radius_range: tuple[float, float] = MISSING
+    """The minimum and maximum height of the obstacles (in m)."""
+    num_obstacles: int = MISSING
+    """The number of obstacles to generate."""
+    platform_width: float = 1.0
+    """The width of the square platform at the center of the terrain. Defaults to 1.0."""
+
+
+
