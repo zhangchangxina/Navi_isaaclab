@@ -54,6 +54,7 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         self.events.add_base_mass = None
 
         self.actions.ugv_action = None
+        self.actions.uav_action.scale = [0.2, 0.2, 0.02]
         self.actions.uav_action.body_name = "base"
         
         # observations - 使用UAV观察配置

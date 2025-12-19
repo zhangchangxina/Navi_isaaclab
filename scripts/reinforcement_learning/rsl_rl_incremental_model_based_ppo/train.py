@@ -201,6 +201,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         stability_coef=getattr(args_cli, "stability_coef", 1e-3),
         use_incremental_actions=getattr(args_cli, "use_incremental_actions", False),
         use_cbf=getattr(args_cli, "use_cbf", False),
+        cbf_safety_distance=getattr(args_cli, "cbf_safety_distance", 0.5),
     )
     # optional: load checkpoint into runner if requested
     ckpt_path = None

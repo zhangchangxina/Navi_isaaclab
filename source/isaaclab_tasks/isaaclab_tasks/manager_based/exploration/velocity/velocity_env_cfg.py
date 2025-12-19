@@ -185,29 +185,66 @@ class CommandsCfg:
     )
 
 
+
+# --------------------------------------------------------
+# UGV 物理参数配置 (Move out of ActionsCfg)
+# --------------------------------------------------------
+_UGV_MAX_VEL = 1.0          # 最大速度 (m/s)
+_UGV_MAX_ACC = 2.5          # 最大加速度 (m/s²) - Nav2标准
+_UGV_MAX_ANG_ACC = 3.2      # 最大角加速度 (rad/s²)
+_UGV_CONTROL_DT = 0.1       # 控制周期 (s) = sim_dt(0.01) * decimation(10)
+
+# 计算每步最大允许变化量
+_UGV_MAX_VEL_STEP = _UGV_MAX_ACC * _UGV_CONTROL_DT       # = 0.25 m/s
+_UGV_MAX_ANG_VEL_STEP = _UGV_MAX_ANG_ACC * _UGV_CONTROL_DT # = 0.32 rad/s
+
+# 动作缩放因子 (Scale) 选择:
+# --------------------------------------------------------
+# 模式 A: 增量模式 (Incremental Mode) - 推荐
+#   动作含义: 速度变化量 (Velocity Delta)
+#   Scale 设置: 应设为每步最大速度变化量 (_UGV_MAX_VEL_STEP)
+#   物理意义: Action=1.0 对应以最大加速度加速
+#
+# 模式 B: 速度模式 (Velocity Mode)
+#   动作含义: 目标速度 (Target Velocity)
+#   Scale 设置: 应设为机器人最大速度 (_UGV_MAX_VEL)
+#   物理意义: Action=1.0 对应以最大速度行驶
+# --------------------------------------------------------
+
+# 当前选择: 增量模式
+_UGV_ACTION_SCALE = _UGV_MAX_VEL_STEP  # 0.25
+
+
+# --------------------------------------------------------
+# UAV 物理参数配置 (Move out of ActionsCfg)
+# --------------------------------------------------------
+_UAV_MAX_VEL = 2.0          # 最大速度 (m/s)
+_UAV_MAX_ACC = 6.5          # 最大加速度 (m/s²) - PX4标准
+_UAV_CONTROL_DT = 0.1       # 控制周期
+
+_UAV_MAX_VEL_STEP = _UAV_MAX_ACC * _UAV_CONTROL_DT       # = 0.65 m/s
+
+# 当前选择: 增量模式
+_UAV_ACTION_SCALE = _UAV_MAX_VEL_STEP  # 0.65
+
+
 @configclass
 class ActionsCfg:
     """Action configuration."""
     
-    # UGV: TurtleBot3 (Waffle Pi) Specs
-    # Max Linear Vel: ~0.26 m/s, Max Angular Vel: ~1.82 rad/s
     ugv_action = mdp.UGVBodyActionCfg(
         asset_name="robot", 
         body_name=["body"],
-        # [线速度 m/s, 角速度 rad/s]
-        # 使用 0.25 和 1.5 作为保守但合理的训练值
-        scale=[0.25, 1.5],
-        lin_acc_limit=2.5,  # Nav2 default
-        ang_acc_limit=3.2   # Nav2 default
+        scale=_UGV_ACTION_SCALE,
+        lin_acc_limit=_UGV_MAX_ACC,  # 内部物理约束
+        ang_acc_limit=_UGV_MAX_ANG_ACC
     )
-    # UAV: 动作直接对应速度，缩放因子根据速度范围调整
-    # 加速度限制: 6.5 m/s² (PX4/Prometheus标准，3-10 m/s²的中间值)
-    # 实际每步限制: 0.65 m/s (控制时间步0.1秒)
+
     uav_action = mdp.UAVBodyActionCfg(
         asset_name="robot", 
         body_name=["body"],
-        scale=2.0,
-        acc_limit=6.5  # 总速度加速度限制 (m/s²)
+        scale=_UAV_ACTION_SCALE,
+        acc_limit=_UAV_MAX_ACC
     )
 
 
@@ -217,21 +254,16 @@ class ObservationsCfg:
     
     @configclass
     class PolicyCfg(ObsGroup):
-        """Observations for policy group (UGV).
-        
-        归一化策略：所有观测归一化到约 [-1, 1] 或 [0, 1] 范围
-        注意：暂不使用scale，由PPO的obs normalization处理
-        """
+        """Observations for policy group."""
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity,)
         pose_command = ObsTerm(func=mdp.pose_command_position_2d, params={"command_name": "pose_command"})
         actions = ObsTerm(func=mdp.last_action)
-        # lidar 距离裁剪到 0~5m（CBF需要知道这个范围）
         lidar_scan = ObsTerm(
             func=mdp.lidar_scan,
             params={"sensor_cfg": SceneEntityCfg("lidar_scanner")},
-            clip=(0.0, 5.0),
+            clip=(-5.0, 5.0),
         )
 
         def __post_init__(self):
@@ -240,21 +272,16 @@ class ObservationsCfg:
     
     @configclass
     class PolicyCfgUAV(ObsGroup):
-        """Observations for UAV policy group (3D navigation).
-        
-        归一化策略：所有观测归一化到约 [-1, 1] 或 [0, 1] 范围
-        注意：暂不使用scale，由PPO的obs normalization处理
-        """
+        """Observations for UAV policy group (3D navigation)."""
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity,)
         pose_command = ObsTerm(func=mdp.pose_command_position_only, params={"command_name": "pose_command"})
         actions = ObsTerm(func=mdp.last_action)
-        # lidar 距离裁剪到 0~5m（CBF需要知道这个范围）
         lidar_scan = ObsTerm(
             func=mdp.lidar_scan,
             params={"sensor_cfg": SceneEntityCfg("lidar_scanner")},
-            clip=(0.0, 5.0),
+            clip=(-5.0, 5.0),
         )
 
         def __post_init__(self):

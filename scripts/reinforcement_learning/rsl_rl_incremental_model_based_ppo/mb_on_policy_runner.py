@@ -25,6 +25,7 @@ from scripts.reinforcement_learning.rsl_rl_incremental_model_based_ppo.increment
     IncrementalDynamicsModel,
     incremental_dynamics_loss,
 )
+from scripts.reinforcement_learning.rsl_rl_incremental_model_based_ppo.cbf import LidarCBF
 
 
 class MbOnPolicyRunner:
@@ -65,6 +66,7 @@ class MbOnPolicyRunner:
         stability_coef: float = 1e-3,
         use_incremental_actions: bool = False,
         use_cbf: bool = False,
+        cbf_safety_distance: float = 0.5,
     ) -> None:
         self.cfg = dict(train_cfg)
         self.alg_cfg = dict(train_cfg["algorithm"])  # copy to avoid mutation
@@ -246,12 +248,21 @@ class MbOnPolicyRunner:
         self._virt_done_count_iter: int = 0
         self._virt_step_count_iter: int = 0
 
-        # CBF metrics / diagnostics
-        self._cbf_trigger_count: int = 0           # CBF触发次数（有环境违反约束）
-        self._cbf_total_violations: int = 0        # 总违规环境数
-        self._cbf_total_correction: float = 0.0    # 累计动作修正量
-        self._cbf_max_barrier: float = 0.0         # 最大barrier值
-        self._cbf_call_count: int = 0              # CBF QP求解调用次数
+        # debug prints control (must be before CBF init which uses _dbg_shapes)
+        self._dbg_shapes = str(os.environ.get("MBPPO_DEBUG_SHAPES", "0")).strip() == "1"
+        _dbg_every = str(os.environ.get("MBPPO_DEBUG_SHAPES_EVERY", "200")).strip()
+        self._dbg_every = int(_dbg_every) if _dbg_every.isdigit() else 200
+
+        # CBF safety filter (using external module)
+        self._cbf: Optional[LidarCBF] = None
+        self.cbf_safety_distance: float = float(cbf_safety_distance)  # meters
+        if self.use_cbf:
+            self._cbf = LidarCBF(
+                lidar_dim=self.lidar_dim,
+                safety_distance=self.cbf_safety_distance,
+                debug=self._dbg_shapes,
+            )
+            print(f"[MBPPO] CBF safety filter enabled: lidar_dim={self.lidar_dim}, safety_distance={self.cbf_safety_distance}m")
 
         # normalization of returns
         self.alg.init_storage(
@@ -263,179 +274,7 @@ class MbOnPolicyRunner:
             [self.env.num_actions],
         )
 
-        # debug prints control
-        self._dbg_shapes = str(os.environ.get("MBPPO_DEBUG_SHAPES", "0")).strip() == "1"
-        _dbg_every = str(os.environ.get("MBPPO_DEBUG_SHAPES_EVERY", "200")).strip()
-        self._dbg_every = int(_dbg_every) if _dbg_every.isdigit() else 200
-
     # ----- internals -----
-    # Lidar 归一化常量（与环境 clip=(0,5) 对应）
-    LIDAR_MAX_RANGE = 5.0
-    
-    # CBF 安全阈值（统一定义）
-    # 0.2:  最近障碍物 < 4.0m 时介入 → 最保守（最初设计）
-    # 1.5:  最近障碍物 < 2.0m 时介入
-    # 2.0:  最近障碍物 < 1.5m 时介入
-    # 3.0:  最近障碍物 < 1.0m 时介入
-    # 5.7:  最近障碍物 < 0.5m 时介入 → 激进
-    CBF_SAFETY_THRESHOLD = 0.2
-    
-    def _normalize_lidar_in_obs(self, obs: torch.Tensor) -> torch.Tensor:
-        """对 obs 中的 lidar 部分进行归一化（原地修改后返回副本）。
-        
-        归一化公式：lidar_normalized = lidar / LIDAR_MAX_RANGE
-        这样 lidar 从 [0, 5] 米变为 [0, 1]
-        """
-        obs_norm = obs.clone()
-        start_idx = -self.lidar_dim
-        obs_norm[:, start_idx:] = obs_norm[:, start_idx:] / self.LIDAR_MAX_RANGE
-        return obs_norm
-    
-    def _extract_lidar(self, obs: torch.Tensor) -> torch.Tensor:
-        """Extract Lidar observations from the full observation tensor.
-        
-        The Lidar data is expected to be at the end of the observation vector.
-        Based on ObservationsCfg in velocity_env_cfg.py:
-        - UGV & UAV: ..., lidar_scan
-        
-        The dimension `self.lidar_dim` is auto-detected from the environment.
-        Note: 如果输入是归一化后的 obs，提取的 lidar 也是归一化的 [0, 1]
-        """
-        start_idx = -self.lidar_dim
-        return obs[:, start_idx:]
-
-    def _compute_lidar_barrier_cost(self, obs_lidar: torch.Tensor, epsilon: float = 0.05, clip_max: float = 20.0) -> torch.Tensor:
-        """
-        Compute Barrier Function cost based on Lidar data (Inverse Barrier).
-        B(x) = mean(1/(x + epsilon) - 1/(1 + epsilon))
-        
-        Note: obs_lidar 是原始 lidar 数据 [0, 5] 米，内部进行归一化
-        
-        使用 mean 模式：所有射线的平均危险度（最初设计）
-        """
-        # 内部归一化：[0, 5] 米 -> [0, 1]
-        dist = torch.clamp(obs_lidar / self.LIDAR_MAX_RANGE, min=1e-6, max=1.0)
-        
-        # Inverse potential: f(x) = 1/(x + eps)
-        barrier_raw = 1.0 / (dist + epsilon)
-        
-        # Zero offset: f(1) = 1/(1 + eps)
-        offset = 1.0 / (1.0 + epsilon)
-        barrier_cost = barrier_raw - offset
-        
-        # Mean over all rays: 所有射线的平均危险度（最初设计）
-        total_cost = torch.mean(barrier_cost, dim=-1)
-        
-        # Clip to prevent gradient explosion
-        total_cost = torch.clamp(total_cost, max=clip_max)
-        
-        return total_cost
-
-    def _solve_cbf_qp(self, obs: torch.Tensor, u_nom: torch.Tensor) -> torch.Tensor:
-        """
-        Solves the CBF-QP optimization problem via Sequential Quadratic Programming (SQP).
-        
-        This implements the standard CBF-QP formulation:
-            minimize  (1/2) * || u - u_nom ||^2
-            subject to B(x_{k+1}) <= h
-            
-        Since the dynamics x_{k+1} = f(x, u) are non-linear (Neural Network), we linearize 
-        the constraint around the current action candidate and solve the resulting QP analytically.
-        
-        Analytic Solution for Single-Constraint QP:
-            u* = u - lambda * g
-            lambda = max(0, (B - h) / ||g||^2)
-            g = grad_u B(x_{k+1})
-            
-        We iterate this process (SQP) to handle the non-linearity of the dynamics model.
-        """
-        # Hyperparameters
-        SQP_ITER = 3            # Number of linearization steps
-        
-        # 使用类常量 self.CBF_SAFETY_THRESHOLD（定义在类顶部）
-        SAFETY_THRESHOLD = self.CBF_SAFETY_THRESHOLD  
-        
-        # Enable gradient computation even if called from no_grad context
-        self._cbf_call_count += 1
-        
-        with torch.enable_grad():
-            # Start with nominal action
-            u = u_nom.detach().clone()
-            u_initial = u.clone()  # 保存初始动作用于计算修正量
-            u.requires_grad = True
-            
-            dyn_model = self._dyn_models[0]
-            dyn_model.eval() # We need gradients wrt input, but not weight updates
-            
-            triggered = False  # 本次调用是否触发
-            
-            for sqp_iter in range(SQP_ITER):
-                # 1. Forward pass: Predict next state x_{k+1}
-                pred_next_state, _, _ = dyn_model(obs, u)
-                
-                # 2. Compute Barrier Value B(x_{k+1})
-                lidar_obs = self._extract_lidar(pred_next_state)
-                barrier_val = self._compute_lidar_barrier_cost(lidar_obs) # [num_envs]
-                
-                # 3. Check Constraint Violation: B(x) - h > 0
-                # Note: We calculate gradients for ALL envs, even those not violating, 
-                # but lambda will be 0 for safe ones.
-                violation = barrier_val - SAFETY_THRESHOLD
-                num_violations = (violation > 0).sum().item()
-                
-                # 记录统计（仅在第一次SQP迭代时）
-                if sqp_iter == 0:
-                    self._cbf_max_barrier = max(self._cbf_max_barrier, barrier_val.max().item())
-                    if num_violations > 0:
-                        triggered = True
-                        self._cbf_total_violations += num_violations
-                
-                # Logging violation statistics for debugging
-                if self._dbg_shapes and sqp_iter == 0:
-                    if num_violations > 0:
-                        print(f"[CBF] SQP iter {sqp_iter}: {num_violations} envs violating. Max barrier: {barrier_val.max().item():.2f}")
-
-                # If maximum violation is negligible, we are safe.
-                if violation.max() <= 1e-4:
-                    break
-                    
-                # 4. Compute Jacobian J = grad_u B(x_{k+1})
-                # We use the trick that grad(sum(B)) wrt u (batch) gives row-wise gradients
-                # because samples are independent.
-                sum_barrier = barrier_val.sum()
-                
-                # Clear previous gradients
-                if u.grad is not None:
-                    u.grad.zero_()
-                    
-                # Compute grad
-                grad_u = torch.autograd.grad(sum_barrier, u, retain_graph=False)[0] # [num_envs, action_dim]
-                
-                # 5. Analytic QP Update (Projected Gradient)
-                with torch.no_grad():
-                    # Compute step size (Lagrange multiplier)
-                    # lambda = (B - h) / ||grad||^2
-                    grad_norm_sq = torch.sum(grad_u**2, dim=-1)
-                    grad_norm_sq = torch.clamp(grad_norm_sq, min=1e-6) # Avoid div/0
-                    
-                    lam = violation / grad_norm_sq
-                    lam = torch.relu(lam) # Constraint is inequality: only push if B > h
-                    
-                    # Update action
-                    # u_new = u - lam * grad
-                    correction = -lam.unsqueeze(-1) * grad_u
-                    u += correction
-                    
-                    # Re-enable grad for next iteration
-                    u.requires_grad = True
-            
-            # 统计本次调用的修正量
-            if triggered:
-                self._cbf_trigger_count += 1
-                correction_norm = torch.norm(u.detach() - u_initial, dim=-1).mean().item()
-                self._cbf_total_correction += correction_norm
-            
-            return u.detach()
 
     def _lazy_init_dyn(self, obs_dim: int, act_dim: int):
         if self._dyn_models:
@@ -611,11 +450,8 @@ class MbOnPolicyRunner:
             self._virt_step_count_iter = 0
             self._dyn_update_steps_iter = 0
             # reset per-iteration CBF counters
-            self._cbf_trigger_count = 0
-            self._cbf_total_violations = 0
-            self._cbf_total_correction = 0.0
-            self._cbf_max_barrier = 0.0
-            self._cbf_call_count = 0
+            if self._cbf is not None:
+                self._cbf.reset_iteration_metrics()
             # rollout
             # Important: use no_grad (not inference_mode) so that tensors stored in
             # rollout can still be used later in autograd during PPO.update.
@@ -685,24 +521,34 @@ class MbOnPolicyRunner:
                     # Apply CBF correction if dynamics models are available
                     # 性能优化：只在模型预热完成后启用CBF，避免早期无效计算
                     cbf_enabled = (
-                        self._dyn_models 
-                        and self.cfg.get("use_cbf", False)
+                        self._cbf is not None
+                        and self._dyn_models 
                         and (not warmup_active)  # 预热期间跳过CBF
                     )
                     if cbf_enabled:
-                        # 每次都调用 CBF（最初设计，无预检查）
                         obs_real_raw = obs[:self.num_envs_real]
+                        dyn_model = self._dyn_models[0]
                         if self.use_incremental_actions:
                             # MB: In incremental mode, CBF optimizes delta (d_real)
-                            d_safe = self._solve_cbf_qp(obs_real_raw, d_real)
+                            d_safe = self._cbf.solve_cbf_qp(dyn_model, obs_real_raw, d_real)
                             # Update accumulator: new_accum = (current_accum - d_nom) + d_safe
                             if self._real_accum_actions is not None:
                                 self._real_accum_actions = self._real_accum_actions - d_real + d_safe
                                 a_real = self._real_accum_actions.detach()
                         else:
-                            a_real = self._solve_cbf_qp(obs_real_raw, a_real)
-                            if self.use_incremental_actions:
-                                self._real_accum_actions = a_real.detach()
+                            # MB: In absolute mode, we must convert to delta for CBF because model expects delta
+                            if self._prev_real_actions is None:
+                                self._prev_real_actions = torch.zeros_like(a_real)
+                            
+                            # 1. Compute nominal delta
+                            d_nom = a_real - self._prev_real_actions
+                            
+                            # 2. CBF optimizes delta
+                            d_safe = self._cbf.solve_cbf_qp(dyn_model, obs_real_raw, d_nom)
+                            
+                            # 3. Reconstruct safe absolute action
+                            a_real = self._prev_real_actions + d_safe
+
                     # ----------------------------------------------------------------------
 
                     obs_real, rew_real, dones_real, extras_real = self.env.step(a_real.to(self.env.device))
@@ -1163,15 +1009,16 @@ class MbOnPolicyRunner:
                     self.writer.add_scalar("MB/R_scale", self.R_scale, locs["it"])  # type: ignore[attr-defined]
                     self.writer.add_scalar("MB/stability_coef", self.stability_coef, locs["it"])  # type: ignore[attr-defined]
                 # CBF-specific scalars
-                if self.use_cbf:
-                    self.writer.add_scalar("CBF/trigger_count", self._cbf_trigger_count, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/total_violations", self._cbf_total_violations, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/max_barrier", self._cbf_max_barrier, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/qp_calls", self._cbf_call_count, locs["it"])  # type: ignore[attr-defined]
-                    if self._cbf_trigger_count > 0:
-                        avg_correction = self._cbf_total_correction / self._cbf_trigger_count
+                if self._cbf is not None:
+                    m = self._cbf.metrics
+                    self.writer.add_scalar("CBF/trigger_count", m.trigger_count, locs["it"])  # type: ignore[attr-defined]
+                    self.writer.add_scalar("CBF/total_violations", m.total_violations, locs["it"])  # type: ignore[attr-defined]
+                    self.writer.add_scalar("CBF/max_barrier", m.max_barrier, locs["it"])  # type: ignore[attr-defined]
+                    self.writer.add_scalar("CBF/qp_calls", m.call_count, locs["it"])  # type: ignore[attr-defined]
+                    if m.trigger_count > 0:
+                        avg_correction = m.total_correction / m.trigger_count
                         self.writer.add_scalar("CBF/avg_correction", avg_correction, locs["it"])  # type: ignore[attr-defined]
-                    trigger_rate = self._cbf_trigger_count / max(1, self._cbf_call_count)
+                    trigger_rate = m.trigger_count / max(1, m.call_count)
                     self.writer.add_scalar("CBF/trigger_rate", trigger_rate, locs["it"])  # type: ignore[attr-defined]
             except Exception:
                 pass
@@ -1199,11 +1046,12 @@ class MbOnPolicyRunner:
             if self._dyn_update_steps_iter > 0:
                 log_string += f"""{'MB dyn last loss:':>{pad}} {self._last_dyn_loss:.4f}\n"""
             # CBF-specific prints
-            if self.use_cbf:
-                if self._cbf_call_count > 0:
-                    cbf_trigger_rate = self._cbf_trigger_count / self._cbf_call_count
-                    log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({self._cbf_trigger_count}/{self._cbf_call_count} triggered)\n"""
-                log_string += f"""{'CBF max barrier:':>{pad}} {self._cbf_max_barrier:.2f}\n"""
+            if self._cbf is not None:
+                m = self._cbf.metrics
+                if m.call_count > 0:
+                    cbf_trigger_rate = m.trigger_count / m.call_count
+                    log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({m.trigger_count}/{m.call_count} triggered)\n"""
+                log_string += f"""{'CBF max barrier:':>{pad}} {m.max_barrier:.2f}\n"""
         else:
             log_string = (
                 f"""{'#' * width}\n"""
@@ -1221,11 +1069,12 @@ class MbOnPolicyRunner:
             if self._dyn_update_steps_iter > 0:
                 log_string += f"""{'MB dyn last loss:':>{pad}} {self._last_dyn_loss:.4f}\n"""
             # CBF-specific prints
-            if self.use_cbf:
-                if self._cbf_call_count > 0:
-                    cbf_trigger_rate = self._cbf_trigger_count / self._cbf_call_count
-                    log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({self._cbf_trigger_count}/{self._cbf_call_count} triggered)\n"""
-                log_string += f"""{'CBF max barrier:':>{pad}} {self._cbf_max_barrier:.2f}\n"""
+            if self._cbf is not None:
+                m = self._cbf.metrics
+                if m.call_count > 0:
+                    cbf_trigger_rate = m.trigger_count / m.call_count
+                    log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({m.trigger_count}/{m.call_count} triggered)\n"""
+                log_string += f"""{'CBF max barrier:':>{pad}} {m.max_barrier:.2f}\n"""
 
         log_string += ep_string
         log_string += (

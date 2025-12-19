@@ -121,6 +121,12 @@ def add_rsl_rl_args(parser: argparse.ArgumentParser):
         default=False,
         help="Whether to enable Control Barrier Function (CBF) safety filter using learned dynamics.",
     )
+    mb_group.add_argument(
+        "--cbf_safety_distance",
+        type=float,
+        default=0.5,
+        help="Safety distance in meters for CBF. Lidar distances below this trigger correction.",
+    )
 
     # Checkpoint utilities
     mb_group.add_argument(

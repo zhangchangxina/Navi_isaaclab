@@ -49,7 +49,10 @@ class TurtlebotRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
 
         # actions
         self.actions.uav_action = None
+
+        self.actions.ugv_action.scale = [0.5, 0.1]
         self.actions.ugv_action.body_name = "base_footprint"
+        self.actions.ugv_action.acc_limit = 0.5 # 设置加速度限制
         
         # observations - 禁用UAV观察，只使用UGV观察
         self.observations.policy_uav = None
