@@ -74,7 +74,8 @@ class MySceneCfg(InteractiveSceneCfg):
             project_uvw=True,
             texture_scale=(0.25, 0.25),
         ),
-        debug_vis=True,
+        # Debug visualization is useful for interactive play, but can break headless training.
+        debug_vis=False,
     )
 
 
@@ -96,7 +97,8 @@ class MySceneCfg(InteractiveSceneCfg):
             project_uvw=True,
             texture_scale=(0.25, 0.25),
         ),
-        debug_vis=True,
+        # Debug visualization is useful for interactive play, but can break headless training.
+        debug_vis=False,
     )
 
 
@@ -109,7 +111,8 @@ class MySceneCfg(InteractiveSceneCfg):
         offset=RayCasterCfg.OffsetCfg(pos=(0, 0, 0.008)),
         mesh_prim_paths=["/World/ground/forest"],
         ray_alignment='yaw',
-        debug_vis=True,  # 启用雷达可视化
+        # Debug visualization is useful for interactive play, but can break headless training.
+        debug_vis=False,
     )
 
     # lights
@@ -138,7 +141,7 @@ class CommandsCfg:
         rel_heading_envs=1.0,
         heading_command=True,
         heading_control_stiffness=0.5,
-        debug_vis=True,
+        debug_vis=False,
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
             # UGV: 0.22-0.26 m/s, UAV: 2 m/s
             lin_vel_x=(-0.25, 0.25), lin_vel_y=(-0.25, 0.25), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
@@ -173,60 +176,48 @@ class CommandsCfg:
         debug_vis=True,
         ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
     )
-    
 
 
-    ## 轨迹显示相关，不显示轨迹请注释以下6行
     traj_command = mdp.TrajectoryVisCommandCfg(
         asset_name="robot",
         resampling_time_range=(0.1, 0.1),
-        max_length=18000,
-        threshold=0.5,
+        max_length=1000,
+        threshold=1.0,  # 增大阈值，只有重置时（位置跳跃>10m）才清除轨迹
     )
 
 
-
 # --------------------------------------------------------
-# UGV 物理参数配置 (Move out of ActionsCfg)
+# UGV 物理参数配置 (仿真加速版)
+# 基于 Turtlebot3 Burger，速度提高约2倍以适应大地图训练
+# 训练成功后可逐步降低速度进行 fine-tune
 # --------------------------------------------------------
-_UGV_MAX_VEL = 1.0          # 最大速度 (m/s)
-_UGV_MAX_ACC = 2.5          # 最大加速度 (m/s²) - Nav2标准
-_UGV_MAX_ANG_ACC = 3.2      # 最大角加速度 (rad/s²)
+# 速度模式：Policy输出[-1,1] × scale = 目标速度
+_UGV_MAX_LIN_VEL = 0.5      # 最大线速度 (m/s) - 仿真加速，约2倍真实速度
+_UGV_MAX_ANG_VEL = 2.0      # 最大角速度 (rad/s) - 略低于真实值，更稳定
 _UGV_CONTROL_DT = 0.1       # 控制周期 (s) = sim_dt(0.01) * decimation(10)
 
-# 计算每步最大允许变化量
-_UGV_MAX_VEL_STEP = _UGV_MAX_ACC * _UGV_CONTROL_DT       # = 0.25 m/s
-_UGV_MAX_ANG_VEL_STEP = _UGV_MAX_ANG_ACC * _UGV_CONTROL_DT # = 0.32 rad/s
+# 加速度限制 (适配加速后的速度)
+_UGV_LIN_ACC = 1.0          # 线加速度限制 (m/s²)
+_UGV_ANG_ACC = 2.0          # 角加速度限制 (rad/s²)
 
-# 动作缩放因子 (Scale) 选择:
-# --------------------------------------------------------
-# 模式 A: 增量模式 (Incremental Mode) - 推荐
-#   动作含义: 速度变化量 (Velocity Delta)
-#   Scale 设置: 应设为每步最大速度变化量 (_UGV_MAX_VEL_STEP)
-#   物理意义: Action=1.0 对应以最大加速度加速
-#
-# 模式 B: 速度模式 (Velocity Mode)
-#   动作含义: 目标速度 (Target Velocity)
-#   Scale 设置: 应设为机器人最大速度 (_UGV_MAX_VEL)
-#   物理意义: Action=1.0 对应以最大速度行驶
-# --------------------------------------------------------
-
-# 当前选择: 增量模式
-_UGV_ACTION_SCALE = _UGV_MAX_VEL_STEP  # 0.25
+# 动作缩放 (速度模式：action=1.0 对应最大速度)
+_UGV_LIN_ACTION_SCALE = _UGV_MAX_LIN_VEL  # 0.5
+_UGV_ANG_ACTION_SCALE = _UGV_MAX_ANG_VEL  # 2.0
 
 
 # --------------------------------------------------------
 # UAV 物理参数配置 (Move out of ActionsCfg)
+# 基于 PX4 飞控标准参数
 # --------------------------------------------------------
-_UAV_MAX_VEL = 2.0          # 最大速度 (m/s)
-_UAV_MAX_ACC = 6.5          # 最大加速度 (m/s²) - PX4标准
+# 速度模式：Policy输出[-1,1] × scale = 目标速度
+_UAV_MAX_VEL_HOR = 3.0      # 水平最大速度 (m/s)
+_UAV_MAX_VEL_Z = 2.0        # 垂直最大速度 (m/s) - 通常比水平慢
 _UAV_CONTROL_DT = 0.1       # 控制周期
 
-_UAV_MAX_VEL_STEP = _UAV_MAX_ACC * _UAV_CONTROL_DT       # = 0.65 m/s
-
-# 当前选择: 增量模式
-_UAV_ACTION_SCALE = _UAV_MAX_VEL_STEP  # 0.65
-
+# 向量加速度限制 (基于PX4标准: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
+_UAV_ACC_HOR = 3.0          # 水平最大加速度 (m/s²) - 向量限制，任意方向一致
+_UAV_ACC_UP = 3.0           # 向上最大加速度 (m/s²)
+_UAV_ACC_DOWN = 2.0         # 向下最大加速度 (m/s²) - 安全限制，防止下降过快
 
 @configclass
 class ActionsCfg:
@@ -235,16 +226,24 @@ class ActionsCfg:
     ugv_action = mdp.UGVBodyActionCfg(
         asset_name="robot", 
         body_name=["body"],
-        scale=_UGV_ACTION_SCALE,
-        lin_acc_limit=_UGV_MAX_ACC,  # 内部物理约束
-        ang_acc_limit=_UGV_MAX_ANG_ACC
+        lin_scale=_UGV_LIN_ACTION_SCALE,   # 速度模式：action=1 → 线速度
+        ang_scale=_UGV_ANG_ACTION_SCALE,   # 速度模式：action=1 → 角速度
+        max_lin_vel=_UGV_MAX_LIN_VEL,      # 最大线速度限制
+        max_ang_vel=_UGV_MAX_ANG_VEL,      # 最大角速度限制
+        lin_acc=_UGV_LIN_ACC,              # 线加速度限制
+        ang_acc=_UGV_ANG_ACC,              # 角加速度限制
     )
 
     uav_action = mdp.UAVBodyActionCfg(
         asset_name="robot", 
         body_name=["body"],
-        scale=_UAV_ACTION_SCALE,
-        acc_limit=_UAV_MAX_ACC
+        scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 3 m/s
+        scale_z=_UAV_MAX_VEL_Z,        # 垂直速度缩放：action=1 → 2 m/s
+        max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
+        max_vel_z=_UAV_MAX_VEL_Z,      # 垂直最大速度限制
+        acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
+        acc_up=_UAV_ACC_UP,            # 向上加速度限制
+        acc_down=_UAV_ACC_DOWN,        # 向下加速度限制
     )
 
 
@@ -274,8 +273,8 @@ class ObservationsCfg:
     class PolicyCfgUAV(ObsGroup):
         """Observations for UAV policy group (3D navigation)."""
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity,)
+        # base_ang_vel = ObsTerm(func=mdp.base_ang_vel)  # 质点模型，角速度始终为0
+        # projected_gravity = ObsTerm(func=mdp.projected_gravity,)  # 质点模型，姿态不变，始终为[0,0,-1]
         pose_command = ObsTerm(func=mdp.pose_command_position_only, params={"command_name": "pose_command"})
         actions = ObsTerm(func=mdp.last_action)
         lidar_scan = ObsTerm(
@@ -375,15 +374,12 @@ class RewardsCfg:
     """Reward terms for the MDP - optimized for position-based navigation."""
 
     # 终止惩罚
-    # termination_penalty = RewTerm(
-    #     func=mdp.is_terminated_term,
-    #     weight=-1000.0,
-    #     params={"term_keys": ["out_of_bounds", "out_of_height_limit", "least_lidar_depth", "roll_over"]}
-    # )
-    
     termination_penalty = RewTerm(
-        func=mdp.is_terminated,
-        weight=-2000.0,  # 比终止惩罚小，但仍然有惩罚
+        # Only penalize "failure" terminations. Do not penalize success termination (reach_target),
+        # otherwise the policy may learn to hover near the goal to avoid ending the episode.
+        func=mdp.is_terminated_term,
+        weight=-200.0,  # Reduced from -2000.0 to prevent gradient explosion
+        params={"term_keys": ["out_of_bounds", "out_of_height_limit", "least_lidar_depth", "roll_over"]},
     )
 
     # 位置跟踪奖励 - 鼓励机器人接近目标点 (2D平面导航)
@@ -403,12 +399,19 @@ class RewardsCfg:
     # 到达目标点奖励 - 大奖励鼓励完成任务
     reach_target_reward = RewTerm(
         func=mdp.reach_target_reward,
-        weight=4000.0,
-        params={"threshold": 3, "command_name": "pose_command"},  # 与终止条件保持一致
+        weight=400.0,  # Reduced from 4000.0 to prevent gradient explosion
+        params={"threshold": 2, "command_name": "pose_command"},  # 与终止条件保持一致
     )
 
     # 动作平滑性惩罚 - 鼓励平滑运动
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)  
+    
+    # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
+    # velocity_near_target = RewTerm(
+    #     func=mdp.velocity_near_target_penalty,
+    #     weight=-2.0,  # 负权重，惩罚高速度
+    #     params={"command_name": "pose_command", "distance_threshold": 5.0},
+    # )  
     
 
     # 朝向奖励 - 鼓励机器人朝向目标
@@ -444,7 +447,7 @@ class TerminationsCfg:
 
     out_of_height_limit = DoneTerm(
         func=mdp.out_of_height_limit,
-        params={"asset_cfg": SceneEntityCfg("robot"), "height_limit": 5.0},
+        params={"asset_cfg": SceneEntityCfg("robot"), "height_limit": 4.0},
     )
 
     least_lidar_depth = DoneTerm(
@@ -457,10 +460,11 @@ class TerminationsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.1},
     )
 
-    # 接近目标点时终止任务并重置
+    # 接近目标点时终止任务并重置 (只需位置到达，不再要求速度减小)
     reach_target = DoneTerm(
         func=mdp.reach_target,
-        params={"threshold": 3, "command_name": "pose_command"},
+        params={"threshold": 2, "command_name": "pose_command"},
+        # velocity_threshold 已移除，不再要求速度减小
     )
 
     

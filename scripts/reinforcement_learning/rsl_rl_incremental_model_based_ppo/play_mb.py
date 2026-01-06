@@ -93,7 +93,11 @@ def main():
     
     # Check if use_incremental_actions is set
     use_incremental_actions = getattr(args_cli, "use_incremental_actions", False)
+    use_cbf = getattr(args_cli, "use_cbf", False)
+    cbf_gamma = getattr(args_cli, "cbf_gamma", 0.5)
+    
     print(f"[INFO] Incremental Actions Mode: {use_incremental_actions}")
+    print(f"[INFO] CBF Safety Filter: {use_cbf} (gamma={cbf_gamma})")
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -137,9 +141,12 @@ def main():
     
     # load previously trained model using MB runner
     # We pass the MB-specific arguments from CLI if they exist
+    dynamics_hidden_dims = getattr(args_cli, "dynamics_hidden_dims", [512, 512])
     mb_kwargs = {
         "use_incremental_actions": use_incremental_actions,
-        # Add other MB args if needed for play, though mostly only incremental actions affect inference loop
+        "use_cbf": use_cbf,
+        "cbf_gamma": cbf_gamma,
+        "dynamics_hidden_dims": dynamics_hidden_dims,
     }
     
     # Construct runner
@@ -147,7 +154,7 @@ def main():
     ppo_runner.load(resume_path)
 
     # obtain the trained policy for inference
-    policy = ppo_runner.alg.actor_critic
+    policy = ppo_runner.policy
     policy.eval()
 
     # export policy to onnx/jit
@@ -167,6 +174,8 @@ def main():
     num_envs = env.num_envs
     num_actions = env.num_actions
     accum_actions = torch.zeros((num_envs, num_actions), device=env.device)
+    # Track previous actions for absolute mode + CBF
+    prev_actions = torch.zeros((num_envs, num_actions), device=env.device)
     
     # simulate environment
     while simulation_app.is_running():
@@ -182,6 +191,37 @@ def main():
             # Policy inference
             # MB runner policies often expect normalized obs
             actions = policy.act_inference(obs_norm)
+            actions_tensor = actions # alias
+            
+            # --- Apply CBF correction if enabled (Must match MB runner logic) ---
+            # NOTE: MbOnPolicyRunner handles CBF inside its `learn` loop, but not automatically in `play_mb.py`
+            # We need to manually invoke CBF here if we want to visualize it.
+            if use_cbf and ppo_runner._cbf is not None and ppo_runner._dyn_models:
+                # Need real obs (raw) for CBF
+                # obs is currently raw (get_observations returns raw)
+                # ppo_runner.lidar_dim is set
+                
+                # We need dynamics model (use the first one)
+                dyn_model = ppo_runner._dyn_models[0]
+                
+                # We need to prepare actions for CBF (which expects delta if incremental, or nominal delta if absolute)
+                if use_incremental_actions:
+                    d_real = actions_tensor
+                    # Solve CBF
+                    d_safe = ppo_runner._cbf.solve_cbf_qp(dyn_model, obs, d_real)
+                    # Replace action
+                    actions = d_safe
+                else:
+                    # Absolute mode: we need to compute nominal delta
+                    # d_nom = a_real - prev_actions
+                    d_nom = actions_tensor - prev_actions
+                    
+                    # Solve CBF for delta
+                    d_safe = ppo_runner._cbf.solve_cbf_qp(dyn_model, obs, d_nom)
+                    
+                    # Reconstruct safe absolute action
+                    # a_safe = prev + d_safe
+                    actions = prev_actions + d_safe
             
             # Handle incremental actions
             if use_incremental_actions:
@@ -199,6 +239,12 @@ def main():
                 reset_ids = (dones > 0).nonzero(as_tuple=False).squeeze(-1)
                 if len(reset_ids) > 0:
                     accum_actions[reset_ids] = 0.0
+            else:
+                # Update prev_actions for next step (Absolute mode)
+                prev_actions = actions_to_env.detach().clone()
+                reset_ids = (dones > 0).nonzero(as_tuple=False).squeeze(-1)
+                if len(reset_ids) > 0:
+                    prev_actions[reset_ids] = 0.0
 
         if args_cli.video:
             timestep += 1

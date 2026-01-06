@@ -172,7 +172,17 @@ class BodyAction(ActionTerm):
 
 
 class UGVBodyAction(BodyAction):
-    """Joint action term that applies the processed actions to the articulation's joints as position commands."""
+    """UGV速度模式动作：Policy输出目标速度，物理限制保证平滑和安全。
+    
+    控制流程：
+    1. Policy输出 [-1,1] × scale = 目标速度 (线速度, 角速度)
+    2. 加速度限制：平滑过渡到目标速度
+    3. 速度上限：确保不超过最大速度
+    
+    差速驱动模型：
+    - 线速度：沿机器人前向方向 (可正可负)
+    - 角速度：绕z轴旋转
+    """
 
     cfg: actions_cfg.UGVBodyActionCfg
     """The configuration of the action term."""
@@ -184,56 +194,59 @@ class UGVBodyAction(BodyAction):
         if cfg.use_default_offset:
             self._offset = self._asset.data.default_root_state[:, self._body_idx].clone()
 
-        self.acc_limit = cfg.acc_limit
+    def process_actions(self, actions: torch.Tensor):
+        """Override to apply different scales for linear and angular velocity."""
+        self._raw_actions[:] = actions
+        # 分别对线速度和角速度应用不同的scale
+        self._processed_actions[:, 0] = actions[:, 0] * self.cfg.lin_scale
+        self._processed_actions[:, 1] = actions[:, 1] * self.cfg.ang_scale
 
     def apply_actions(self):
-        # 获取当前线速度和角速度
-        current_lin_vel = torch.norm(self._asset.data.root_lin_vel_b[:, :2], dim=-1)  # xy平面的线速度
+        """Apply velocity commands with Nav2-style physical limits.
+        
+        速度模式 + 加速度限制 + 速度上限
+        """
+        # 获取当前速度 (body frame)
+        current_lin_vel = self._asset.data.root_lin_vel_b[:, 0]  # 前向速度 (x方向)
         current_ang_vel = self._asset.data.root_ang_vel_b[:, 2]  # z轴角速度
         quat = self._asset.data.root_link_quat_w
 
-        # 目标线速度和角速度（动作直接对应速度）
-        target_lin_vel = self.processed_actions[:, 0]
-        target_ang_vel = self.processed_actions[:, 1]
+        # 目标速度（速度模式：processed_actions 直接是目标速度）
+        target_lin_vel = self._processed_actions[:, 0]
+        target_ang_vel = self._processed_actions[:, 1]
         
-        # 使用配置中的加速度限制
-        lin_acc_limit_per_step = self.cfg.lin_acc_limit_per_step
-        ang_acc_limit_per_step = self.cfg.ang_acc_limit_per_step
+        # 获取物理限制参数
+        lin_acc = self.cfg.lin_acc_per_step
+        ang_acc = self.cfg.ang_acc_per_step
+        max_lin_vel = self.cfg.max_lin_vel
+        max_ang_vel = self.cfg.max_ang_vel
         
-        # 对线速度进行加速度限制 (基于Nav2标准)
-        # 限制速度变化率，确保平滑运动
-        clamped_lin_vel = torch.clamp(
+        # ========== Step 1: 线速度加速度限制 ==========
+        new_lin_vel = torch.clamp(
             target_lin_vel, 
-            min=current_lin_vel - lin_acc_limit_per_step, 
-            max=current_lin_vel + lin_acc_limit_per_step
+            min=current_lin_vel - lin_acc, 
+            max=current_lin_vel + lin_acc
         )
-
-        # 对角速度进行加速度限制 (基于Nav2标准)
-        # 限制角速度变化率，确保平滑转向
-        clamped_ang_vel = torch.clamp(
-            target_ang_vel, 
-            min=current_ang_vel - ang_acc_limit_per_step, 
-            max=current_ang_vel + ang_acc_limit_per_step
-        )
-
-        # 计算线速度方向（基于当前xy平面速度方向或默认方向）
-        current_lin_vel_direction = torch.zeros_like(self._asset.data.root_lin_vel_b[:, :2])
-        non_zero_mask = current_lin_vel > 1e-6
-        current_lin_vel_direction[non_zero_mask] = self._asset.data.root_lin_vel_b[non_zero_mask, :2] / current_lin_vel[non_zero_mask].unsqueeze(-1)
         
-        # 如果没有当前线速度，使用默认的前进方向
-        default_direction = torch.tensor([1.0, 0.0], device=self.device)
-        current_lin_vel_direction[~non_zero_mask] = default_direction
+        # ========== Step 2: 线速度上限 ==========
+        new_lin_vel = torch.clamp(new_lin_vel, min=-max_lin_vel, max=max_lin_vel)
 
-        # 计算新的线速度向量（只在xy平面）
-        new_lin_vel_vector = torch.zeros_like(self._asset.data.root_lin_vel_b)
-        new_lin_vel_vector[:, :2] = clamped_lin_vel.unsqueeze(-1) * current_lin_vel_direction
+        # ========== Step 3: 角速度加速度限制 ==========
+        new_ang_vel = torch.clamp(
+            target_ang_vel, 
+            min=current_ang_vel - ang_acc, 
+            max=current_ang_vel + ang_acc
+        )
+        
+        # ========== Step 4: 角速度上限 ==========
+        new_ang_vel = torch.clamp(new_ang_vel, min=-max_ang_vel, max=max_ang_vel)
 
+        # 构建速度命令（差速驱动：前向速度 + 旋转）
         root_velocities = torch.zeros(self.num_envs, 6, device=self.device)
-        root_velocities[:, 0:3] = new_lin_vel_vector  # 线速度（z方向保持为0）
-        root_velocities[:, 5] = clamped_ang_vel  # 角速度
+        root_velocities[:, 0] = new_lin_vel  # 前向线速度 (body frame x)
+        root_velocities[:, 5] = new_ang_vel  # z轴角速度
 
-        # 应用四元数变换
+        # 从 body frame 转换到 world frame
         root_velocities[:, 0:3] = math_utils.quat_apply(quat, root_velocities[:, 0:3])
 
         self._asset.write_root_link_velocity_to_sim(root_velocities)
@@ -242,7 +255,17 @@ class UGVBodyAction(BodyAction):
 
 
 class UAVBodyAction(BodyAction):
-    """Joint action term that applies the processed actions to the articulation's joints as position commands."""
+    """UAV速度模式动作：Policy输出目标速度，物理限制保证平滑和安全。
+    
+    控制流程：
+    1. Policy输出 [-1,1] × scale = 目标速度
+    2. 加速度限制：平滑过渡到目标速度
+    3. 速度上限：确保不超过最大速度
+    
+    物理限制（基于PX4飞控）：
+    - 水平方向：向量加速度限制 + 速度上限
+    - 垂直方向：非对称加速度限制（上/下不同）+ 速度上限
+    """
 
     cfg: actions_cfg.UAVBodyActionCfg
     """The configuration of the action term."""
@@ -254,50 +277,64 @@ class UAVBodyAction(BodyAction):
         if cfg.use_default_offset:
             self._offset = self._asset.data.default_root_state[:, self._body_idx].clone()
 
-        self.acc_limit = cfg.acc_limit
+    def process_actions(self, actions: torch.Tensor):
+        """Override to apply different scales for horizontal and vertical velocity."""
+        self._raw_actions[:] = actions
+        # 水平方向 (x, y) 使用 scale_hor
+        self._processed_actions[:, 0] = actions[:, 0] * self.cfg.scale_hor
+        self._processed_actions[:, 1] = actions[:, 1] * self.cfg.scale_hor
+        # 垂直方向 (z) 使用 scale_z
+        self._processed_actions[:, 2] = actions[:, 2] * self.cfg.scale_z
 
     def apply_actions(self):
-        # 获取当前总速度
-        current_vel = torch.norm(self._asset.data.root_lin_vel_b, dim=-1)
+        """Apply velocity commands with PX4-style physical limits.
+        
+        速度模式 + 加速度限制 + 速度上限
+        """
+        # 获取当前速度 (body frame)
+        current_vel = self._asset.data.root_lin_vel_b.clone()  # (num_envs, 3)
         quat = self._asset.data.root_link_quat_w
 
-        # 目标速度向量（动作直接对应速度）
-        target_vel_vector = self.processed_actions[:, 0:3]
-        target_vel_magnitude = torch.norm(target_vel_vector, dim=-1)
+        # 目标速度向量（速度模式：processed_actions 直接是目标速度）
+        target_vel = self.processed_actions[:, 0:3]  # (num_envs, 3)
         
-        # 使用配置中的加速度限制
-        acc_limit_per_step = self.cfg.acc_limit_per_step
+        # 获取物理限制参数
+        acc_hor = self.cfg.acc_hor_per_step    # 水平加速度限制 (向量magnitude)
+        acc_up = self.cfg.acc_up_per_step      # 向上加速度限制
+        acc_down = self.cfg.acc_down_per_step  # 向下加速度限制
+        max_vel_hor = self.cfg.max_vel_hor     # 水平最大速度
+        max_vel_z = self.cfg.max_vel_z         # 垂直最大速度
         
-        # 对总速度进行加速度限制 (基于PX4/Prometheus标准)
-        # 限制速度变化率，确保平滑运动
-        clamped_vel_magnitude = torch.clamp(
-            target_vel_magnitude, 
-            min=current_vel - acc_limit_per_step, 
-            max=current_vel + acc_limit_per_step
+        new_vel = torch.zeros_like(current_vel)
+        
+        # ========== Step 1: 水平方向加速度限制 (向量限制) ==========
+        delta_vel_hor = target_vel[:, :2] - current_vel[:, :2]  # (num_envs, 2)
+        delta_magnitude = torch.norm(delta_vel_hor, dim=1, keepdim=True)  # (num_envs, 1)
+        
+        # 如果变化量超过加速度限制，按比例缩放
+        acc_scale = torch.clamp(acc_hor / (delta_magnitude + 1e-6), max=1.0)  # (num_envs, 1)
+        new_vel[:, :2] = current_vel[:, :2] + delta_vel_hor * acc_scale
+        
+        # ========== Step 2: 水平速度上限 (向量限制) ==========
+        vel_hor_magnitude = torch.norm(new_vel[:, :2], dim=1, keepdim=True)  # (num_envs, 1)
+        vel_scale = torch.clamp(max_vel_hor / (vel_hor_magnitude + 1e-6), max=1.0)
+        new_vel[:, :2] = new_vel[:, :2] * vel_scale
+        
+        # ========== Step 3: 垂直方向加速度限制 (非对称) ==========
+        new_vel[:, 2] = torch.clamp(
+            target_vel[:, 2],
+            min=current_vel[:, 2] - acc_down,  # 向下减速/加速
+            max=current_vel[:, 2] + acc_up     # 向上加速
         )
-
-        # 计算速度方向（基于目标速度方向或当前速度方向）
-        target_vel_direction = torch.zeros_like(target_vel_vector)
-        non_zero_mask = target_vel_magnitude > 1e-6
-        target_vel_direction[non_zero_mask] = target_vel_vector[non_zero_mask] / target_vel_magnitude[non_zero_mask].unsqueeze(-1)
         
-        # 如果目标速度为零，使用当前速度方向或默认方向
-        current_vel_direction = torch.zeros_like(self._asset.data.root_lin_vel_b)
-        current_non_zero_mask = current_vel > 1e-6
-        current_vel_direction[current_non_zero_mask] = self._asset.data.root_lin_vel_b[current_non_zero_mask] / current_vel[current_non_zero_mask].unsqueeze(-1)
+        # ========== Step 4: 垂直速度上限 ==========
+        new_vel[:, 2] = torch.clamp(new_vel[:, 2], min=-max_vel_z, max=max_vel_z)
         
-        # 默认方向（向上）
-        default_direction = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        target_vel_direction[~non_zero_mask] = current_vel_direction[~non_zero_mask]
-        target_vel_direction[~non_zero_mask & ~current_non_zero_mask] = default_direction
-
-        # 计算新的速度向量
-        new_vel_vector = clamped_vel_magnitude.unsqueeze(-1) * target_vel_direction
-
+        # 构建速度命令
         root_velocities = torch.zeros(self.num_envs, 6, device=self.device)
-        root_velocities[:, 0:3] = new_vel_vector
+        root_velocities[:, 0:3] = new_vel
 
-        # 应用四元数变换
+        # 从 body frame 转换到 world frame
         root_velocities[:, 0:3] = math_utils.quat_apply(quat, root_velocities[:, 0:3])
 
         self._asset.write_root_link_velocity_to_sim(root_velocities)

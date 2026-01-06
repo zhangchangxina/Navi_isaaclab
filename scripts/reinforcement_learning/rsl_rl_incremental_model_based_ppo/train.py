@@ -201,7 +201,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         stability_coef=getattr(args_cli, "stability_coef", 1e-3),
         use_incremental_actions=getattr(args_cli, "use_incremental_actions", False),
         use_cbf=getattr(args_cli, "use_cbf", False),
-        cbf_safety_distance=getattr(args_cli, "cbf_safety_distance", 0.5),
+        cbf_gamma=getattr(args_cli, "cbf_gamma", 0.5),
+        # Safe RL / BC regularization
+        use_bc=getattr(args_cli, "use_bc", False),
+        bc_coef=getattr(args_cli, "bc_coef", 0.1),
+        bc_decay=getattr(args_cli, "bc_decay", 1.0),
+        bc_min=getattr(args_cli, "bc_min", 0.0),
+        bc_loss_type=getattr(args_cli, "bc_loss_type", "mse"),
     )
     # optional: load checkpoint into runner if requested
     ckpt_path = None

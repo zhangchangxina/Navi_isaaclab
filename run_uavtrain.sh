@@ -1,4 +1,5 @@
-export CUDA_VISIBLE_DEVICES=1
+GPU_ID=${1:-0}
+export CUDA_VISIBLE_DEVICES=${GPU_ID}
 export WANDB_BASE_URL=https://api.bandw.top
 # export WANDB_MODE=disabled
 

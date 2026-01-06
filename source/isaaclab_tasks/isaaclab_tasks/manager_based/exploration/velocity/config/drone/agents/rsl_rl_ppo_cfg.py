@@ -34,12 +34,12 @@ class DroneRoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         entropy_coef=0.01,
         num_learning_epochs=5,
         num_mini_batches=4,
-        learning_rate=1.0e-3,
+        learning_rate=3.0e-4,  # Reduced from 1e-3 for stability
         schedule="adaptive",
         gamma=0.99,
         lam=0.95,
         desired_kl=0.01,
-        max_grad_norm=1.0,
+        max_grad_norm=0.5,  # Reduced from 1.0 for tighter gradient clipping
     )
 
 

@@ -106,13 +106,15 @@ class TrajectoryVisCommand(CommandTerm):
         if self.trajectory_points is None:
             self.trajectory_points = pos_w.clone().unsqueeze(1).repeat(1, self.cfg.max_length, 1)
         else:
-            self.trajectory_points = self.trajectory_points.roll(shifts=-1, dims=1)  # 沿dim=1左移1位
+            # self.trajectory_points = self.trajectory_points.roll(shifts=-1, dims=1)  # 沿dim=1左移1位
+            self.trajectory_points[:, :-1] = self.trajectory_points[:, 1:]
             self.trajectory_points[:, -1, :] = pos_w
 
         if self.trajectory_vels is None:
             self.trajectory_vels = linvel_w.clone().unsqueeze(1).repeat(1, self.cfg.max_length, 1)
         else:
-            self.trajectory_vels = self.trajectory_vels.roll(shifts=-1, dims=1)  # 沿dim=1左移1位
+            # self.trajectory_vels = self.trajectory_vels.roll(shifts=-1, dims=1)  # 沿dim=1左移1位
+            self.trajectory_vels[:, :-1] = self.trajectory_vels[:, 1:]
             self.trajectory_vels[:, -1, :] = linvel_w
 
         if not DEBUG_DRAW_AVAILABLE:

@@ -39,13 +39,28 @@ class BodyActionCfg(ActionTermCfg):
 
 @configclass
 class UGVBodyActionCfg(BodyActionCfg):
+    """UGV速度模式动作配置（差速驱动）。
+    
+    速度模式：Policy输出[-1,1] × scale = 目标速度
+    物理限制：加速度限制 + 速度上限
+    
+    动作维度：2 (线速度, 角速度)
+    """
 
     use_default_offset: bool = True
     action_dim = 2
     
+    # 动作缩放（分开设置线速度和角速度）
+    lin_scale: float = 1.0   # 线速度缩放 (m/s)
+    ang_scale: float = 1.5   # 角速度缩放 (rad/s)
+    
+    # 速度限制配置 (基于Nav2标准)
+    max_lin_vel: float = 1.0   # 最大线速度 (m/s)
+    max_ang_vel: float = 1.5   # 最大角速度 (rad/s)
+    
     # 加速度限制配置 (基于Nav2标准)
-    lin_acc_limit: float = 2.5  # 线速度加速度限制 (m/s²)
-    ang_acc_limit: float = 3.2  # 角速度加速度限制 (rad/s²)
+    lin_acc: float = 2.5    # 线加速度限制 (m/s²)
+    ang_acc: float = 3.2    # 角加速度限制 (rad/s²)
     
     # 时间步长配置
     sim_dt: float = 0.01  # 仿真时间步 (秒)
@@ -59,26 +74,41 @@ class UGVBodyActionCfg(BodyActionCfg):
     
     # 计算每步速度变化限制
     @property
-    def lin_acc_limit_per_step(self) -> float:
+    def lin_acc_per_step(self) -> float:
         """线速度每步变化限制 (m/s)"""
-        return self.lin_acc_limit * self.control_dt
+        return self.lin_acc * self.control_dt
     
     @property
-    def ang_acc_limit_per_step(self) -> float:
+    def ang_acc_per_step(self) -> float:
         """角速度每步变化限制 (rad/s)"""
-        return self.ang_acc_limit * self.control_dt
+        return self.ang_acc * self.control_dt
 
     class_type: type[ActionTerm] = body_actions.UGVBodyAction
 
 
 @configclass
 class UAVBodyActionCfg(BodyActionCfg):
+    """UAV速度模式动作配置。
+    
+    速度模式：Policy输出[-1,1] × scale = 目标速度
+    物理限制：加速度限制 + 速度上限
+    """
 
     use_default_offset: bool = True
     action_dim = 3
     
-    # 加速度限制配置 (基于PX4/Prometheus标准)
-    acc_limit: float = 6.5  # 总速度加速度限制 (m/s²)
+    # 动作缩放（分开设置水平和垂直）
+    scale_hor: float = 3.0   # 水平速度缩放 (m/s) - action=1 → 3 m/s
+    scale_z: float = 2.0     # 垂直速度缩放 (m/s) - action=1 → 2 m/s
+    
+    # 速度限制配置 (基于PX4飞控标准: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX)
+    max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
+    max_vel_z: float = 2.0     # 垂直最大速度 (m/s)
+    
+    # 加速度限制配置 (基于PX4飞控标准: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
+    acc_hor: float = 3.0    # 水平最大加速度 (m/s²) - 向量限制
+    acc_up: float = 3.0     # 向上最大加速度 (m/s²)
+    acc_down: float = 2.0   # 向下最大加速度 (m/s²) - 安全限制
     
     # 时间步长配置
     sim_dt: float = 0.01  # 仿真时间步 (秒)
@@ -90,11 +120,23 @@ class UAVBodyActionCfg(BodyActionCfg):
         """实际控制时间步 (秒)"""
         return self.sim_dt * self.decimation
     
-    # 计算每步速度变化限制
+    # 计算每步水平速度变化限制
     @property
-    def acc_limit_per_step(self) -> float:
-        """总速度每步变化限制 (m/s)"""
-        return self.acc_limit * self.control_dt
+    def acc_hor_per_step(self) -> float:
+        """水平方向每步速度变化限制 (m/s)"""
+        return self.acc_hor * self.control_dt
+    
+    # 计算每步向上速度变化限制
+    @property
+    def acc_up_per_step(self) -> float:
+        """向上每步速度变化限制 (m/s)"""
+        return self.acc_up * self.control_dt
+    
+    # 计算每步向下速度变化限制
+    @property
+    def acc_down_per_step(self) -> float:
+        """向下每步速度变化限制 (m/s)"""
+        return self.acc_down * self.control_dt
 
     class_type: type[ActionTerm] = body_actions.UAVBodyAction
 

@@ -49,11 +49,11 @@ class LidarCBF:
         self,
         lidar_dim: int,
         *,
-        safety_threshold: float = 0.2,
+        gamma: float = 1,
         debug: bool = False,
     ) -> None:
         self.lidar_dim: int = int(lidar_dim)
-        self.safety_threshold: float = float(safety_threshold)
+        self.gamma: float = float(gamma)
         self.debug: bool = bool(debug)
 
         self.metrics: CBFMetrics = CBFMetrics()
@@ -79,6 +79,13 @@ class LidarCBF:
         return self.metrics.total_correction
 
     @property
+    def avg_correction(self) -> float:
+        """Average correction norm per trigger."""
+        if self.metrics.trigger_count > 0:
+            return self.metrics.total_correction / self.metrics.trigger_count
+        return 0.0
+
+    @property
     def max_barrier(self) -> float:
         return self.metrics.max_barrier
 
@@ -98,40 +105,35 @@ class LidarCBF:
         start_idx = -self.lidar_dim
         return obs[:, start_idx:]
 
-    def _compute_lidar_barrier_cost(
+    def _compute_barrier_and_h(
         self,
         obs_lidar: torch.Tensor,
         epsilon: float = 0.05,
-        clip_max: float = 20.0,
-    ) -> torch.Tensor:
-        """Compute inverse barrier cost from Lidar distances.
+        clip_max: float = 10000.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute barrier cost B and metric h.
 
         Assumes obs_lidar is normalized to [0, 1] range.
-        Barrier: B(x) = mean(1/(x + eps) - 1/(1 + eps))
-        
-        阈值含义（单根射线 Cost 参考）:
-        - x=1.0 -> 0.0
-        - x=0.5 -> 0.87
-        - x=0.2 -> 3.05
-        - x=0.1 -> 5.71
-        
-        对于 mean 模式，threshold=0.2 相当于大约 7% 的平均势能（即整体较靠近障碍物或有部分极近）
+        Barrier: B(x) = -log(x + eps) - offset
+        This is numerically more stable than 1/(x+eps).
         """
         # 归一化: [0, 5m] -> [0, 1]，然后 clamp 防止异常
         dist = torch.clamp(obs_lidar / 5.0, min=1e-6, max=1.0)
         
-        # 逆势能: f(x) = 1/(x + eps)
-        barrier_raw = 1.0 / (dist + epsilon)
+        # Log barrier: f(x) = -log(x + eps)
+        # 梯度是 -1/(x+eps)，不像 1/(x+eps)^2 那么剧烈
+        barrier_raw = -torch.log(dist + epsilon)
         
-        # 零点偏移: f(1) = 1/(1 + eps)，使得 x=1 时 B=0
-        offset = 1.0 / (1.0 + epsilon)
-        barrier_cost = barrier_raw - offset
-        
-        total_cost = torch.sum(barrier_cost, dim=-1)
+        # 零点偏移: f(1) = -log(1 + eps)，使得 x=1 时 B=0
+        offset = -torch.log(torch.tensor(1.0 + epsilon, device=dist.device))
+        barrier_raw = barrier_raw - offset
+
+        total_barrier = torch.sum(barrier_raw, dim=-1)
+        total_h = torch.sum(dist, dim=-1)
         
         # Clip to prevent gradient explosion
-        total_cost = torch.clamp(total_cost, max=clip_max)
-        return total_cost
+        total_barrier = torch.clamp(total_barrier, max=clip_max)
+        return total_barrier, total_h
 
     def solve_cbf_qp(
         self,
@@ -139,12 +141,12 @@ class LidarCBF:
         obs: torch.Tensor,
         u_nom: torch.Tensor,
         *,
-        sqp_iter: int = 5,
+        sqp_iter: int = 3,
     ) -> torch.Tensor:
         """Solve the CBF-QP via Sequential Quadratic Programming.
 
         minimize  (1/2) * || u - u_nom ||^2
-        s.t.      B(x_{k+1}) <= safety_threshold
+        s.t.      B(x_{k+1}) - B(x_k) <= gamma * h(x_k)
 
         where x_{k+1} comes from the learned dynamics model.
         """
@@ -157,18 +159,29 @@ class LidarCBF:
                 "call_count": self.metrics.call_count,
                 "obs_shape": list(obs.shape),
                 "u_nom_shape": list(u_nom.shape),
-                "safety_threshold": self.safety_threshold,
+                "gamma": self.gamma,
                 "lidar_dim": self.lidar_dim,
             }, hypothesis_id="H1_cbf_called")
         # #endregion
 
-        with torch.enable_grad():
+        # Must exit inference_mode AND enable_grad for autograd to work
+        # inference_mode(False) is needed because play scripts run inside inference_mode()
+        with torch.inference_mode(False), torch.enable_grad():
+            # Clone obs to escape inference mode (obs may have been created in inference_mode context)
+            obs = obs.detach().clone()
+            
             # start from nominal action
             u = u_nom.detach().clone()
             u_initial = u.clone()
             u.requires_grad = True
 
             dyn_model.eval()
+
+            # Pre-compute current barrier and h
+            lidar_curr = self._extract_lidar(obs)
+            b_curr, h_curr = self._compute_barrier_and_h(lidar_curr)
+            b_curr = b_curr.detach()
+            h_curr = h_curr.detach()
 
             triggered = False
 
@@ -177,31 +190,31 @@ class LidarCBF:
                 pred_next_state, _, _ = dyn_model(obs, u)
 
                 # 2. Compute barrier value B(x_{k+1})
-                lidar_obs = self._extract_lidar(pred_next_state)
-                barrier_val = self._compute_lidar_barrier_cost(lidar_obs)
+                lidar_next = self._extract_lidar(pred_next_state)
+                b_next, _ = self._compute_barrier_and_h(lidar_next)
 
                 # #region agent log
                 # 只在前 5 次调用的第一次 SQP 迭代记录 lidar 数据
                 if self.metrics.call_count <= 5 and i == 0:
                     _log_debug("cbf.py:solve_cbf_qp:lidar", "Lidar and barrier values", {
-                        "lidar_min": float(lidar_obs.min().item()),
-                        "lidar_max": float(lidar_obs.max().item()),
-                        "lidar_mean": float(lidar_obs.mean().item()),
-                        "barrier_min": float(barrier_val.min().item()),
-                        "barrier_max": float(barrier_val.max().item()),
-                        "barrier_mean": float(barrier_val.mean().item()),
-                        "threshold": self.safety_threshold,
+                        "lidar_min": float(lidar_next.min().item()),
+                        "lidar_max": float(lidar_next.max().item()),
+                        "lidar_mean": float(lidar_next.mean().item()),
+                        "barrier_min": float(b_next.min().item()),
+                        "barrier_max": float(b_next.max().item()),
+                        "barrier_mean": float(b_next.mean().item()),
+                        "gamma": self.gamma,
                     }, hypothesis_id="H2_lidar_range")
                 # #endregion
 
-                # 3. Constraint violation: B(x) - h > 0
-                violation = barrier_val - self.safety_threshold
+                # 3. Constraint violation: B(x') - B(x) - gamma * h(x) > 0
+                violation = b_next - b_curr - self.gamma * h_curr
                 num_violations = (violation > 0).sum().item()
 
                 if i == 0:
                     self.metrics.max_barrier = max(
                         self.metrics.max_barrier,
-                        float(barrier_val.max().item()),
+                        float(b_next.max().item()),
                     )
                     if num_violations > 0:
                         triggered = True
@@ -210,7 +223,7 @@ class LidarCBF:
                 if self.debug and i == 0 and num_violations > 0:
                     print(
                         f"[CBF] SQP iter {i}: {num_violations} envs violating. "
-                        f"Max barrier: {barrier_val.max().item():.2f}",
+                        f"Max violation: {violation.max().item():.2f}",
                         flush=True,
                     )
 
@@ -218,14 +231,14 @@ class LidarCBF:
                 if violation.max() <= 1e-4:
                     break
 
-                # 4. Jacobian J = dB/du via autograd
-                sum_barrier = barrier_val.sum()
+                # 4. Jacobian J = d(violation)/du via autograd
+                sum_violation = violation.sum()
 
                 if u.grad is not None:
                     u.grad.zero_()
 
                 grad_u = torch.autograd.grad(
-                    sum_barrier,
+                    sum_violation,
                     u,
                     retain_graph=False,
                 )[0]

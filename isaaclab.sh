@@ -13,7 +13,9 @@
 set -e
 
 # Set tab-spaces
-tabs 4
+# Note: In non-interactive shells (e.g., TERM=dumb in CI/tmux piping), `tabs` may fail.
+# Since this is purely cosmetic, don't let it abort the script.
+tabs 4 2>/dev/null || true
 
 # get source directory
 export ISAACLAB_PATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"

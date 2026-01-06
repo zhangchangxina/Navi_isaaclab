@@ -166,19 +166,28 @@ def ang_vel_xy_l2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntit
 
 
 def position_command_error_abs(env: ManagerBasedRLEnv, origin_distance: float, command_name: str) -> torch.Tensor:
-    """Reward position tracking with tanh kernel."""
+    """Reward position tracking with a bounded tanh kernel.
+
+    Notes:
+        We intentionally keep this reward bounded in [0, 1] to avoid a common failure mode where the agent
+        prefers to loiter near the target (just outside the termination threshold) to collect large per-step
+        rewards instead of finishing the episode.
+    """
     command = env.command_manager.get_command(command_name)
     des_pos_b = command[:, :3]
     distance = torch.norm(des_pos_b, dim=1)
-    return origin_distance - distance
+    # normalize distance by a characteristic "origin" distance and squash
+    # distance -> 0  => reward -> 1
+    # distance -> inf => reward -> 0
+    return 1.0 - torch.tanh(distance / origin_distance)
 
 
 def position_command_error_2d(env: ManagerBasedRLEnv, origin_distance: float, command_name: str) -> torch.Tensor:
-    """Reward 2D position tracking for UGV (ignoring height)."""
+    """Reward 2D position tracking for UGV (ignoring height), bounded with tanh kernel."""
     command = env.command_manager.get_command(command_name)
     des_pos_2d = command[:, :2]  # 只取xy平面坐标
     distance_2d = torch.norm(des_pos_2d, dim=1)  # 2D欧几里得距离
-    return origin_distance - distance_2d
+    return 1.0 - torch.tanh(distance_2d / origin_distance)
 
 
 def lidar_depth_min(env: ManagerBasedRLEnv, threshold: float, sensor_cfg = SceneEntityCfg("lidar_scanner")) -> torch.Tensor:
@@ -196,3 +205,32 @@ def reach_target_reward(env: ManagerBasedRLEnv, threshold: float, command_name: 
     from .terminations import reach_target
     is_reached = reach_target(env, threshold, command_name)
     return torch.where(is_reached, 1.0, 0.0)
+
+
+def velocity_near_target_penalty(
+    env: ManagerBasedRLEnv, 
+    command_name: str, 
+    distance_threshold: float = 5.0,  # 5米内开始减速
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Penalize high velocity when near target - encourages hovering/stopping.
+    
+    Args:
+        env: The environment object.
+        command_name: Name of the command to track.
+        distance_threshold: Distance to target below which velocity is penalized.
+        asset_cfg: Configuration for the robot asset.
+        
+    Returns:
+        Velocity magnitude when near target, zero otherwise.
+    """
+    command = env.command_manager.get_command(command_name)
+    des_pos_b = command[:, :2]
+    distance = torch.norm(des_pos_b, dim=1)
+    
+    asset = env.scene[asset_cfg.name]
+    velocity = torch.norm(asset.data.root_lin_vel_w[:, :3], dim=1)
+    
+    # 只在接近目标时惩罚速度
+    near_target = distance < distance_threshold
+    return torch.where(near_target, velocity, torch.zeros_like(velocity))

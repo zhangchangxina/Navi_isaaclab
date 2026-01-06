@@ -93,13 +93,32 @@ def roll_over(
 
 
 def reach_target(
-    env: ManagerBasedRLEnv, threshold: float, command_name: str
+    env: ManagerBasedRLEnv, threshold: float, command_name: str,
+    velocity_threshold: float = None  # 速度阈值 m/s, None表示不检查速度
 ) -> torch.Tensor:
-    """Terminate when the robot reaches the target within threshold distance."""
+    """Terminate when the robot reaches the target within threshold distance.
+    
+    Args:
+        env: The environment object.
+        threshold: Position distance threshold in meters.
+        command_name: Name of the command to track.
+        velocity_threshold: Optional velocity threshold. If provided, robot must also 
+                          have velocity below this value to terminate.
+    """
     command = env.command_manager.get_command(command_name)
     # Use 2D XY distance
     des_pos_b = command[:, :2]
     distance = torch.norm(des_pos_b, dim=1)
+    position_reached = distance <= threshold
+    
+    # 如果指定了速度阈值，还需要检查速度
+    if velocity_threshold is not None:
+        asset: RigidObject = env.scene["robot"]
+        velocity = torch.norm(asset.data.root_lin_vel_w[:, :3], dim=1)
+        velocity_low = velocity <= velocity_threshold
+        # 需要同时满足：位置到达 + 速度足够低
+        return position_reached & velocity_low
+    
     # Return True if within threshold, False otherwise
-    return distance <= threshold
+    return position_reached
 

@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from isaaclab.utils import configclass
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab_tasks.manager_based.exploration.velocity import mdp
 
 from isaaclab_tasks.manager_based.exploration.velocity.velocity_env_cfg import ExplorationVelocityRoughEnvCfg
@@ -47,15 +48,31 @@ class TurtlebotRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         self.events.add_base_mass.params["asset_cfg"].body_names = "base_footprint"
 
 
-        # actions
+        # actions - 禁用UAV动作，只使用UGV动作
         self.actions.uav_action = None
 
-        self.actions.ugv_action.scale = [0.5, 0.1]
+        # Turtlebot 仿真加速参数（约2倍真实速度，加速训练）
+        # 训练完成后可降低速度 fine-tune
         self.actions.ugv_action.body_name = "base_footprint"
-        self.actions.ugv_action.acc_limit = 0.5 # 设置加速度限制
+        self.actions.ugv_action.lin_scale = 0.5      # action=1 → 0.5 m/s (仿真加速)
+        self.actions.ugv_action.ang_scale = 2.0      # action=1 → 2.0 rad/s (略低于真实)
+        self.actions.ugv_action.max_lin_vel = 0.5    # 最大线速度限制
+        self.actions.ugv_action.max_ang_vel = 2.0    # 最大角速度限制
+        self.actions.ugv_action.lin_acc = 1.0        # 线加速度限制 (m/s²)
+        self.actions.ugv_action.ang_acc = 2.0        # 角加速度限制 (rad/s²)
         
         # observations - 禁用UAV观察，只使用UGV观察
         self.observations.policy_uav = None
+
+        # commands - UGV目标点稍微抬高便于可视化
+        self.commands.pose_command.offset_z = 0.2
+
+        # rewards - UGV使用2D距离奖励（地面导航，不考虑高度）
+        self.rewards.position_tracking_abs_3d = RewTerm(
+            func=mdp.position_command_error_2d,  # 使用2D位置奖励函数
+            weight=1,
+            params={"origin_distance": 50.0, "command_name": "pose_command"},
+        )
 
 
 
@@ -72,8 +89,8 @@ class TurtlebotRoughEnvCfg_PLAY(TurtlebotRoughEnvCfg):
         self.scene.terrain.max_init_terrain_level = None
         # reduce the number of terrains to save memory
         if self.scene.terrain.terrain_generator is not None:
-            self.scene.terrain.terrain_generator.num_rows = 5
-            self.scene.terrain.terrain_generator.num_cols = 5
+            self.scene.terrain.terrain_generator.num_rows = 1
+            self.scene.terrain.terrain_generator.num_cols = 1
             self.scene.terrain.terrain_generator.curriculum = False
 
         # disable randomization for play

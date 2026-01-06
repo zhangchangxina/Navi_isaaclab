@@ -26,6 +26,7 @@ from scripts.reinforcement_learning.rsl_rl_incremental_model_based_ppo.increment
     incremental_dynamics_loss,
 )
 from scripts.reinforcement_learning.rsl_rl_incremental_model_based_ppo.cbf import LidarCBF
+from scripts.reinforcement_learning.rsl_rl_incremental_model_based_ppo.safe_ppo import SafePPO
 
 
 class MbOnPolicyRunner:
@@ -66,7 +67,13 @@ class MbOnPolicyRunner:
         stability_coef: float = 1e-3,
         use_incremental_actions: bool = False,
         use_cbf: bool = False,
-        cbf_safety_distance: float = 0.5,
+        cbf_gamma: float = 0.5,
+        # Safe RL / BC regularization parameters
+        use_bc: bool = False,
+        bc_coef: float = 0.1,
+        bc_decay: float = 1.0,
+        bc_min: float = 0.0,
+        bc_loss_type: str = "mse",
     ) -> None:
         self.cfg = dict(train_cfg)
         self.alg_cfg = dict(train_cfg["algorithm"])  # copy to avoid mutation
@@ -178,8 +185,31 @@ class MbOnPolicyRunner:
         self.policy.update_distribution = types.MethodType(_wrapped_update_distribution, self.policy)
 
         # algorithm
-        alg_class = eval(self.alg_cfg.pop("class_name"))
-        self.alg: PPO = alg_class(self.policy, device=self.device, **self.alg_cfg)
+        # CBF and Safe RL / BC config (define use_cbf early so it can be used below)
+        self.use_cbf: bool = bool(use_cbf)
+        self.use_bc: bool = bool(use_bc)
+        self.bc_coef: float = float(bc_coef)
+        self.bc_decay: float = float(bc_decay)
+        self.bc_min: float = float(bc_min)
+        self.bc_loss_type: str = str(bc_loss_type).lower()
+        
+        alg_class_name = self.alg_cfg.pop("class_name")
+        # Use SafePPO when BC is enabled (requires CBF to provide u2)
+        if self.use_bc and self.use_cbf:
+            print(f"[MBPPO] Using SafePPO with BC regularization: bc_coef={self.bc_coef}, bc_decay={self.bc_decay}, bc_min={self.bc_min}, bc_loss_type={self.bc_loss_type}")
+            self.alg: PPO = SafePPO(
+                self.policy, 
+                device=self.device, 
+                bc_coef=self.bc_coef,
+                bc_decay=self.bc_decay,
+                bc_min=self.bc_min,
+                bc_loss_type=self.bc_loss_type,
+                **self.alg_cfg
+            )
+        else:
+            # Standard PPO
+            alg_class = eval(alg_class_name)
+            self.alg: PPO = alg_class(self.policy, device=self.device, **self.alg_cfg)
 
         # training schedule
         self.num_steps_per_env: int = int(self.cfg["num_steps_per_env"])  # per real env
@@ -201,7 +231,7 @@ class MbOnPolicyRunner:
         self.num_envs_total: int = int(self.num_envs_real + (self.num_envs_virt if self.include_virtual else 0))
         self.num_actions: int = int(self.env.num_actions)
         self.use_incremental_actions: bool = bool(use_incremental_actions)
-        self.use_cbf: bool = bool(use_cbf)
+        # use_cbf already defined above (before algorithm selection)
         self.cfg["use_cbf"] = self.use_cbf  # for self.cfg.get("use_cbf", False) lookup
         # safety clamps for virtual predictions
         self.mb_virt_reward_clip: float = float(self.cfg.get("mb_virt_reward_clip", 2000.0))
@@ -255,14 +285,14 @@ class MbOnPolicyRunner:
 
         # CBF safety filter (using external module)
         self._cbf: Optional[LidarCBF] = None
-        self.cbf_safety_distance: float = float(cbf_safety_distance)  # meters
+        self.cbf_gamma: float = float(cbf_gamma)  # actually gamma, not distance
         if self.use_cbf:
             self._cbf = LidarCBF(
                 lidar_dim=self.lidar_dim,
-                safety_distance=self.cbf_safety_distance,
+                gamma=self.cbf_gamma,
                 debug=self._dbg_shapes,
             )
-            print(f"[MBPPO] CBF safety filter enabled: lidar_dim={self.lidar_dim}, safety_distance={self.cbf_safety_distance}m")
+            print(f"[MBPPO] CBF safety filter enabled: lidar_dim={self.lidar_dim}, gamma={self.cbf_gamma}")
 
         # normalization of returns
         self.alg.init_storage(
@@ -394,6 +424,12 @@ class MbOnPolicyRunner:
                     "stability_coef": self.stability_coef,
                     "use_incremental_actions": self.use_incremental_actions,
                     "use_cbf": self.use_cbf,
+                    "cbf_gamma": self.cfg.get("cbf_gamma", None),
+                    "use_bc": self.use_bc,
+                    "bc_coef": self.bc_coef,
+                    "bc_decay": self.bc_decay,
+                    "bc_min": self.bc_min,
+                    "bc_loss_type": self.bc_loss_type,
                 }
                 # 合并到 self.cfg 的副本中
                 cfg_with_mb = {**self.cfg, "model_based": mb_cfg}
@@ -439,6 +475,15 @@ class MbOnPolicyRunner:
         lenbuffer: deque = deque(maxlen=100)
         cur_reward_sum = torch.zeros((self.num_envs_total,), dtype=torch.float32, device=self.device)
         cur_episode_length = torch.zeros((self.num_envs_total,), dtype=torch.float32, device=self.device)
+        
+        # [Safe RL] Buffer to store original actions (u1) for BC loss computation
+        # Shape: (num_steps, num_envs_total, action_dim)
+        original_actions_buffer: Optional[torch.Tensor] = None
+        if self.use_bc and self.use_cbf:
+            original_actions_buffer = torch.zeros(
+                (self.num_steps_per_env, self.num_envs_total, self.num_actions),
+                dtype=torch.float32, device=self.device
+            )
 
         start_iter = 0
         tot_iter = num_learning_iterations
@@ -452,6 +497,11 @@ class MbOnPolicyRunner:
             # reset per-iteration CBF counters
             if self._cbf is not None:
                 self._cbf.reset_iteration_metrics()
+            
+            # Reset episode infos for this iteration to avoid cumulative averaging
+            if self.log_dir is not None:
+                ep_infos = []
+
             # rollout
             # Important: use no_grad (not inference_mode) so that tensors stored in
             # rollout can still be used later in autograd during PPO.update.
@@ -516,6 +566,13 @@ class MbOnPolicyRunner:
 
                     # step real env
                     # ----------------------------------------------------------------------
+                    # [Safe RL] Store original actions (u1) before CBF correction
+                    # ----------------------------------------------------------------------
+                    if original_actions_buffer is not None:
+                        # Store the original policy output (before CBF)
+                        original_actions_buffer[step] = actions_tensor.detach().clone()
+                    
+                    # ----------------------------------------------------------------------
                     # CBF Safety Filter using Learned Dynamics
                     # ----------------------------------------------------------------------
                     # Apply CBF correction if dynamics models are available
@@ -555,6 +612,36 @@ class MbOnPolicyRunner:
                     obs_real = obs_real.to(self.device)
                     rew_real = rew_real.to(self.device).view(-1)  # 1D
                     dones_real = dones_real.to(self.device).view(-1)  # 1D
+
+                    # ----------------------------------------------------------------------
+                    # [Safe RL] Overwrite PPO Storage with Safe Action u2 (a_real)
+                    # ----------------------------------------------------------------------
+                    # 将 CBF 修正后的动作 a_real 存入 PPO buffer，而非原始动作 u1
+                    # 同时需要重新计算 log_prob，确保 importance sampling ratio 正确
+                    if cbf_enabled:
+                        with torch.no_grad():
+                            # 构建完整的 safe actions 张量 (Real: a_real, Virtual: 原始)
+                            if self.include_virtual:
+                                # 获取原始的 virtual 部分
+                                _, a_virt_orig = torch.split(actions_tensor, [self.num_envs_real, self.num_envs_virt], dim=0)
+                                actions_safe = torch.cat([a_real, a_virt_orig], dim=0)
+                            else:
+                                actions_safe = a_real
+                            
+                            # 重新计算 log_prob (因为动作变了，对应的概率也变了)
+                            # rsl_rl ActorCritic 接口:
+                            #   - act(obs) 更新分布并采样
+                            #   - get_actions_log_prob(actions) 获取给定动作的 log_prob
+                            # 我们需要先用 obs 更新分布，再计算 actions_safe 的 log_prob
+                            self.alg.policy.act(obs_curr_nrm)
+                            log_prob_safe = self.alg.policy.get_actions_log_prob(actions_safe)
+                            
+                            # 覆盖 PPO Storage 中的 actions 和 log_prob
+                            # storage 形状: actions (num_steps, num_envs, action_dim), log_prob (num_steps, num_envs, 1)
+                            self.alg.storage.actions[step] = actions_safe
+                            # log_prob 需要 unsqueeze 以匹配 storage 的形状
+                            self.alg.storage.actions_log_prob[step] = log_prob_safe.unsqueeze(-1)
+                    # ----------------------------------------------------------------------
 
                     # update replay with last real transition (approximate: we need last obs, actions)
                     # Here we use current obs for state and obs_real for next_state
@@ -780,6 +867,12 @@ class MbOnPolicyRunner:
                 if invalid_mask.any():
                     std_data[invalid_mask] = 1.0
                 self.alg.policy.std.data = torch.clamp(std_data, min=1e-6, max=10.0)
+            
+            # [Safe RL] Pass original actions (u1) to SafePPO for BC loss computation
+            if self.use_bc and self.use_cbf and original_actions_buffer is not None:
+                if hasattr(self.alg, "set_original_actions"):
+                    self.alg.set_original_actions(original_actions_buffer)
+            
             loss_dict = self.alg.update()
             learn_time = float(time.time() - t1)
 
@@ -847,7 +940,8 @@ class MbOnPolicyRunner:
                 )
             for i, m in enumerate(self._dyn_models):
                 m.load_state_dict(dyn_sd[i])
-            if load_optimizer and "dyn_optimizer_state_dicts" in ckpt:
+                m.eval() # Set to eval mode
+            if load_optimizer and resumed_training and "dyn_optimizer_state_dicts" in ckpt:
                 dopts = ckpt["dyn_optimizer_state_dicts"]
                 if len(dopts) != len(self._dyn_optims):
                     raise ValueError(
@@ -1011,15 +1105,23 @@ class MbOnPolicyRunner:
                 # CBF-specific scalars
                 if self._cbf is not None:
                     m = self._cbf.metrics
-                    self.writer.add_scalar("CBF/trigger_count", m.trigger_count, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/total_violations", m.total_violations, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/max_barrier", m.max_barrier, locs["it"])  # type: ignore[attr-defined]
-                    self.writer.add_scalar("CBF/qp_calls", m.call_count, locs["it"])  # type: ignore[attr-defined]
+                    # User requested 8*256 scale (env-steps) for all counts
+                    # total_violations is already on this scale
+                    self.writer.add_scalar("CBF/trigger_count", m.total_violations, locs["it"])  # type: ignore[attr-defined]
+                    
                     if m.trigger_count > 0:
-                        avg_correction = m.total_correction / m.trigger_count
-                        self.writer.add_scalar("CBF/avg_correction", avg_correction, locs["it"])  # type: ignore[attr-defined]
-                    trigger_rate = m.trigger_count / max(1, m.call_count)
-                    self.writer.add_scalar("CBF/trigger_rate", trigger_rate, locs["it"])  # type: ignore[attr-defined]
+                        self.writer.add_scalar("CBF/avg_correction", self._cbf.avg_correction, locs["it"])  # type: ignore[attr-defined]
+                    
+                    # Violation rate: proportion of individual environment steps that were unsafe
+                    # Total opportunities for violation = num_envs_real * num_steps_per_env = 256 * 8
+                    total_opportunities = max(1, self.num_envs_real * self.num_steps_per_env)
+                    violation_rate = float(m.total_violations) / float(total_opportunities)
+                    self.writer.add_scalar("CBF/violation_rate", violation_rate, locs["it"])  # type: ignore[attr-defined]
+                # Safe RL specific scalars (BC regularization)
+                if self.use_bc and self.use_cbf:
+                    self.writer.add_scalar("SafeRL/bc_coef", self.alg.bc_coef if hasattr(self.alg, "bc_coef") else 0, locs["it"])  # type: ignore[attr-defined]
+                    if hasattr(self.alg, "last_bc_loss"):
+                        self.writer.add_scalar("SafeRL/bc_loss", self.alg.last_bc_loss, locs["it"])  # type: ignore[attr-defined]
             except Exception:
                 pass
 
@@ -1049,8 +1151,10 @@ class MbOnPolicyRunner:
             if self._cbf is not None:
                 m = self._cbf.metrics
                 if m.call_count > 0:
-                    cbf_trigger_rate = m.trigger_count / m.call_count
-                    log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({m.trigger_count}/{m.call_count} triggered)\n"""
+                    # Log violation rate instead of trigger rate
+                    total_opportunities = max(1, self.num_envs_real * self.num_steps_per_env)
+                    violation_rate = float(m.total_violations) / float(total_opportunities)
+                    log_string += f"""{'CBF violation rate:':>{pad}} {violation_rate:.2%} ({m.total_violations}/{total_opportunities} env-steps)\n"""
                 log_string += f"""{'CBF max barrier:':>{pad}} {m.max_barrier:.2f}\n"""
         else:
             log_string = (
@@ -1072,8 +1176,10 @@ class MbOnPolicyRunner:
             if self._cbf is not None:
                 m = self._cbf.metrics
                 if m.call_count > 0:
-                    cbf_trigger_rate = m.trigger_count / m.call_count
-                    log_string += f"""{'CBF trigger rate:':>{pad}} {cbf_trigger_rate:.1%} ({m.trigger_count}/{m.call_count} triggered)\n"""
+                    # Log violation rate instead of trigger rate
+                    total_opportunities = max(1, self.num_envs_real * self.num_steps_per_env)
+                    violation_rate = float(m.total_violations) / float(total_opportunities)
+                    log_string += f"""{'CBF violation rate:':>{pad}} {violation_rate:.2%} ({m.total_violations}/{total_opportunities} env-steps)\n"""
                 log_string += f"""{'CBF max barrier:':>{pad}} {m.max_barrier:.2f}\n"""
 
         log_string += ep_string

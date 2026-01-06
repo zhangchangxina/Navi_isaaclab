@@ -122,10 +122,45 @@ def add_rsl_rl_args(parser: argparse.ArgumentParser):
         help="Whether to enable Control Barrier Function (CBF) safety filter using learned dynamics.",
     )
     mb_group.add_argument(
-        "--cbf_safety_distance",
+        "--cbf_gamma",
         type=float,
         default=0.5,
-        help="Safety distance in meters for CBF. Lidar distances below this trigger correction.",
+        help="Gamma (decay rate) for CBF safety filter. Previously called safety_distance.",
+    )
+    # Deprecated alias kept for compatibility if needed, but prefer cbf_gamma
+    # mb_group.add_argument("--cbf_safety_distance", dest="cbf_gamma", type=float, help="Alias for --cbf_gamma")
+    
+    # Safe RL / Behavior Cloning Regularization
+    mb_group.add_argument(
+        "--use_bc",
+        action="store_true",
+        default=False,
+        help="Enable Behavior Cloning regularization to learn from CBF-corrected actions (u2).",
+    )
+    mb_group.add_argument(
+        "--bc_coef",
+        type=float,
+        default=0.1,
+        help="Coefficient for BC regularization loss: lambda * ||u1 - u2||^2.",
+    )
+    mb_group.add_argument(
+        "--bc_decay",
+        type=float,
+        default=1.0,
+        help="Decay factor for bc_coef per update (set <1.0 to anneal).",
+    )
+    mb_group.add_argument(
+        "--bc_min",
+        type=float,
+        default=0.0,
+        help="Minimum value for bc_coef after decay.",
+    )
+    mb_group.add_argument(
+        "--bc_loss_type",
+        type=str,
+        default="mse",
+        choices=["mse", "kl"],
+        help="Type of BC loss: 'mse' for ||u1-u2||^2, 'kl' for KL divergence (Eq 9 style).",
     )
 
     # Checkpoint utilities
