@@ -38,10 +38,23 @@ def base_pos_z(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg(
 
 
 def base_lin_vel(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
-    """Root linear velocity in the asset's root frame."""
+    """Root linear velocity in heading frame (yaw-aligned, gravity-aligned Z).
+    
+    与部署端 (Prometheus) 对齐：使用航向坐标系，只考虑 Yaw 旋转，Z 轴始终与重力对齐。
+    这样策略学到的速度观测与部署时一致。
+    """
     # extract the used quantities (to enable type-hinting)
     asset: RigidObject = env.scene[asset_cfg.name]
-    return asset.data.root_lin_vel_b
+    
+    # 世界坐标系速度
+    lin_vel_w = asset.data.root_lin_vel_w
+    
+    # 提取 yaw 四元数并旋转到航向系
+    quat_w = asset.data.root_quat_w
+    yaw_quat = math_utils.yaw_quat(quat_w)
+    lin_vel_heading = math_utils.quat_apply_inverse(yaw_quat, lin_vel_w)
+    
+    return lin_vel_heading
 
 
 def base_ang_vel(env: ManagerBasedEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
