@@ -108,7 +108,13 @@ class MySceneCfg(InteractiveSceneCfg):
     lidar_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         update_period=1 / 60,
-        offset=RayCasterCfg.OffsetCfg(pos=(0, 0, 0.008)),
+        # MID360 安装位置和姿态 (参考 SU17 官方文档)
+        # 位置: x=0.13m(前), y=0, z=0.23m(上)
+        # 姿态: 15° 前倾 (pitch), 四元数 (w,x,y,z) = (0.9914, 0, 0.1305, 0)
+        offset=RayCasterCfg.OffsetCfg(
+            pos=(0.13, 0, 0.23),
+            rot=(0.9914, 0, 0.1305, 0),  # 15° pitch forward tilt
+        ),
         mesh_prim_paths=["/World/ground/forest"],
         ray_alignment='yaw',
         # Debug visualization is useful for interactive play, but can break headless training.

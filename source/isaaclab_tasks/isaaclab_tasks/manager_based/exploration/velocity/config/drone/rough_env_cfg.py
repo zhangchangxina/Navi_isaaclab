@@ -23,10 +23,11 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         self.scene.robot = DRONE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.scene.lidar_scanner.prim_path = "{ENV_REGEX_NS}/Robot/body"
 
-        # Drone雷达配置 - 基于真实激光雷达参数
+        # Drone雷达配置 - 基于真实 Livox MID360 参数
+        # 参考: https://docs.amovlab.com/su17u-v2-wiki/#/src/硬件介绍/SU17-GPS-MID360科研版
         from isaaclab.sensors import patterns
         self.scene.lidar_scanner.pattern_cfg = patterns.LidarPatternCfg(
-            # 真实激光雷达配置（4线激光雷达）
+            # MID360 原始 FOV: 垂直 -7°~52°, 水平 360°
             channels=8, vertical_fov_range=(-7.0, 52.0), horizontal_fov_range=(-180.0, 180.0), horizontal_res=10.0
             # channels=16, vertical_fov_range=(-7.0, 52.0), horizontal_fov_range=(-180.0, 180.0), horizontal_res=5.0
             # 低分辨率配置（训练用，与检查点兼容）
