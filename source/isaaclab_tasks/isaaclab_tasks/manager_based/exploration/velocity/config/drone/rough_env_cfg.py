@@ -21,7 +21,7 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         super().__post_init__()
 
         self.scene.robot = DRONE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-        self.scene.lidar_scanner.prim_path = "{ENV_REGEX_NS}/Robot/base"
+        self.scene.lidar_scanner.prim_path = "{ENV_REGEX_NS}/Robot/body"
 
         # Drone雷达配置 - 基于真实激光雷达参数
         from isaaclab.sensors import patterns
@@ -56,15 +56,14 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         # actions - 禁用UGV动作，只使用UAV动作
         self.actions.ugv_action = None
         
-        # Drone 参数配置 (速度模式)
-        self.actions.uav_action.body_name = "base"
-        self.actions.uav_action.scale_hor = 3.0      # 水平速度缩放：action=1 → 3 m/s
-        self.actions.uav_action.scale_z = 2.0        # 垂直速度缩放：action=1 → 2 m/s
-        self.actions.uav_action.max_vel_hor = 3.0    # 水平最大速度限制
-        self.actions.uav_action.max_vel_z = 2.0      # 垂直最大速度限制
-        self.actions.uav_action.acc_hor = 3.0        # 水平加速度限制 (m/s²)
-        self.actions.uav_action.acc_up = 3.0         # 向上加速度限制 (m/s²)
-        self.actions.uav_action.acc_down = 2.0       # 向下加速度限制 (m/s²)
+        # Drone 参数配置 (UAVVelocityWithDynamicsActionCfg)
+        self.actions.uav_action.body_name = ["body"]  # 与 SU17.usd 模型一致
+        self.actions.uav_action.scale_hor = 3.0       # 水平速度缩放：action=1 → 3 m/s
+        self.actions.uav_action.scale_z = 2.0         # 垂直速度缩放：action=1 → 2 m/s
+        self.actions.uav_action.max_vel_hor = 3.0     # 水平最大速度限制
+        self.actions.uav_action.max_vel_z = 2.0       # 垂直最大速度限制
+        self.actions.uav_action.max_acc_hor = 3.0     # 水平最大加速度 (m/s²)
+        self.actions.uav_action.max_acc_z = 3.0       # 垂直最大加速度 (m/s²)
         
         # observations - 使用UAV观察配置
         self.observations.policy = self.observations.policy_uav

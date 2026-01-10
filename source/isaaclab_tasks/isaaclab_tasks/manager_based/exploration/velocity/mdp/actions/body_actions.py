@@ -402,7 +402,8 @@ class ExternalForceTorqueAction(BodyAction):
 
     def __init__(self, cfg: actions_cfg.ExternalForceTorqueActionCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
-        self._body_id = self._asset.find_bodies("body")[0]
+        # 使用配置中的 body_name，而不是硬编码
+        self._body_id = self._body_idx[0]
         self._robot_mass = self._asset.root_physx_view.get_masses()[0].sum()
         self._gravity_magnitude = torch.tensor((0.0, 0.0, -9.81), device=self.device).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
@@ -447,8 +448,8 @@ class UAVVelocityWithDynamicsAction(BodyAction):
     def __init__(self, cfg: actions_cfg.UAVVelocityWithDynamicsActionCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
         
-        # 获取机体信息
-        self._body_id = self._asset.find_bodies("body")[0]
+        # 获取机体信息 (使用配置中的 body_name，由父类解析)
+        self._body_id = self._body_idx[0]
         self._robot_mass = self._asset.root_physx_view.get_masses()[0].sum()
         self._gravity = 9.81
         self._robot_weight = (self._robot_mass * self._gravity).item()
@@ -550,9 +551,7 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         
         # ========== Step 2: 姿态控制 → 力矩 ==========
         # 获取当前姿态角 (从四元数提取 roll, pitch, yaw)
-        current_euler = math_utils.quat_to_euler(quat)  # (roll, pitch, yaw)
-        current_roll = current_euler[:, 0]
-        current_pitch = current_euler[:, 1]
+        current_roll, current_pitch, _ = math_utils.euler_xyz_from_quat(quat)
         
         # 姿态误差 (roll, pitch)
         roll_error = target_roll - current_roll
