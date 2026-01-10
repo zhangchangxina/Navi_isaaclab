@@ -202,10 +202,14 @@ class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
     scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
     scale_yaw: float = 1.5     # 航向角速度缩放 (rad/s): action=1 → 1.5 rad/s ≈ 86°/s
     
-    # 速度限制
+    # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX_UP/DN)
     max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
     max_vel_z: float = 2.0     # 垂直最大速度 (m/s)
     max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s)
+    
+    # 加速度限制 (PX4: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
+    max_acc_hor: float = 3.0   # 水平最大加速度 (m/s²), PX4 默认 5.0
+    max_acc_z: float = 3.0     # 垂直最大加速度 (m/s²), PX4 默认 4.0
     
     # 时间步长
     sim_dt: float = 0.01

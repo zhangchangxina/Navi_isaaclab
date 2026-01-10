@@ -498,8 +498,21 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         quat = self._asset.data.root_link_quat_w  # 四元数 (w, x, y, z)
         
         # 目标速度 (机体系) 和 目标航向角速度
-        target_vel_b = self.processed_actions[:, 0:3]
+        target_vel_b = self.processed_actions[:, 0:3].clone()
         target_yaw_rate = self.processed_actions[:, 3]  # 策略输出的航向角速度
+        
+        # ========== Step 0: 速度限制 (与 PX4 一致) ==========
+        # 水平速度限制 (向量方式)
+        vel_hor = target_vel_b[:, :2]
+        vel_hor_mag = torch.norm(vel_hor, dim=1, keepdim=True)
+        vel_hor_scale = torch.clamp(self.cfg.max_vel_hor / (vel_hor_mag + 1e-6), max=1.0)
+        target_vel_b[:, :2] = vel_hor * vel_hor_scale
+        
+        # 垂直速度限制
+        target_vel_b[:, 2] = torch.clamp(target_vel_b[:, 2], -self.cfg.max_vel_z, self.cfg.max_vel_z)
+        
+        # 航向角速度限制
+        target_yaw_rate = torch.clamp(target_yaw_rate, -self.cfg.max_yaw_rate, self.cfg.max_yaw_rate)
         
         # ========== Step 1: 速度控制 → 目标姿态 ==========
         # 速度误差 (机体系)
@@ -518,6 +531,16 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         Kd_vel = self.cfg.vel_kd
         
         desired_acc = Kp_vel * vel_error + Ki_vel * self._vel_error_integral + Kd_vel * vel_error_derivative
+        
+        # ========== Step 1.5: 加速度限制 (与 PX4 一致) ==========
+        # 水平加速度限制 (向量方式)
+        acc_hor = desired_acc[:, :2]
+        acc_hor_mag = torch.norm(acc_hor, dim=1, keepdim=True)
+        acc_hor_scale = torch.clamp(self.cfg.max_acc_hor / (acc_hor_mag + 1e-6), max=1.0)
+        desired_acc[:, :2] = acc_hor * acc_hor_scale
+        
+        # 垂直加速度限制
+        desired_acc[:, 2] = torch.clamp(desired_acc[:, 2], -self.cfg.max_acc_z, self.cfg.max_acc_z)
         
         # 期望加速度 → 期望姿态角 (小角度近似)
         # ax ≈ g * tan(pitch) ≈ g * pitch
