@@ -234,16 +234,37 @@ class ActionsCfg:
         ang_acc=_UGV_ANG_ACC,              # 角加速度限制
     )
 
-    uav_action = mdp.UAVBodyActionCfg(
+    # ============================================================
+    # UAV Action 选择 (三选一)
+    # ============================================================
+    
+    # 方案 1: 质点模型 - 直接写入速度 (无动力学, 训练快)
+    # uav_action = mdp.UAVBodyActionCfg(
+    #     asset_name="robot", 
+    #     body_name=["body"],
+    #     scale_hor=_UAV_MAX_VEL_HOR,
+    #     scale_z=_UAV_MAX_VEL_Z,
+    #     max_vel_hor=_UAV_MAX_VEL_HOR,
+    #     max_vel_z=_UAV_MAX_VEL_Z,
+    #     acc_hor=_UAV_ACC_HOR,
+    #     acc_up=_UAV_ACC_UP,
+    #     acc_down=_UAV_ACC_DOWN,
+    # )
+    
+    # 方案 2: 策略输出速度+yaw_rate + 仿真用力矩 (有动力学, 推荐!)
+    # 动作空间: [vx, vy, vz, yaw_rate] (4维)
+    # PID 参数匹配 PX4 默认值，确保 Sim-to-Real 一致性
+    uav_action = mdp.UAVVelocityWithDynamicsActionCfg(
         asset_name="robot", 
         body_name=["body"],
         scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 3 m/s
         scale_z=_UAV_MAX_VEL_Z,        # 垂直速度缩放：action=1 → 2 m/s
+        scale_yaw=1.5,                 # 航向角速度缩放：action=1 → 1.5 rad/s
         max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
         max_vel_z=_UAV_MAX_VEL_Z,      # 垂直最大速度限制
-        acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
-        acc_up=_UAV_ACC_UP,            # 向上加速度限制
-        acc_down=_UAV_ACC_DOWN,        # 向下加速度限制
+        max_yaw_rate=1.5,              # 最大航向角速度 (rad/s)
+        # 下层 PID 参数 (匹配 PX4 默认值)
+        # 使用默认值即可，已在 UAVVelocityWithDynamicsActionCfg 中设置
     )
 
 

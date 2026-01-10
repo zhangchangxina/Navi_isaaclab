@@ -88,10 +88,15 @@ class UGVBodyActionCfg(BodyActionCfg):
 
 @configclass
 class UAVBodyActionCfg(BodyActionCfg):
-    """UAV速度模式动作配置。
+    """UAV速度模式动作配置 (机体系速度 + 航向跟随)。
     
-    速度模式：Policy输出[-1,1] × scale = 目标速度
-    物理限制：加速度限制 + 速度上限
+    控制模式：
+    - Policy输出[-1,1] × scale = 机体系目标速度 (vx_body, vy_body, vz_body)
+    - 航向自动跟随：无人机自动朝向世界系水平速度方向
+    
+    物理限制：加速度限制 + 速度上限 + 角速度限制
+    
+    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY)
     """
 
     use_default_offset: bool = True
@@ -109,6 +114,12 @@ class UAVBodyActionCfg(BodyActionCfg):
     acc_hor: float = 3.0    # 水平最大加速度 (m/s²) - 向量限制
     acc_up: float = 3.0     # 向上最大加速度 (m/s²)
     acc_down: float = 2.0   # 向下最大加速度 (m/s²) - 安全限制
+    
+    # ========== 航向跟随配置 ==========
+    # 无人机自动朝向世界系水平速度方向
+    yaw_rate_gain: float = 2.0    # 航向P控制器增益
+    max_yaw_rate: float = 1.5     # 最大角速度 (rad/s) ≈ 86°/s
+    yaw_acc: float = 3.0          # 角加速度限制 (rad/s²)
     
     # 时间步长配置
     sim_dt: float = 0.01  # 仿真时间步 (秒)
@@ -137,29 +148,102 @@ class UAVBodyActionCfg(BodyActionCfg):
     def acc_down_per_step(self) -> float:
         """向下每步速度变化限制 (m/s)"""
         return self.acc_down * self.control_dt
+    
+    # 计算每步角速度变化限制
+    @property
+    def yaw_acc_per_step(self) -> float:
+        """角速度每步变化限制 (rad/s)"""
+        return self.yaw_acc * self.control_dt
 
     class_type: type[ActionTerm] = body_actions.UAVBodyAction
 
 
 @configclass
 class ExternalForceTorqueActionCfg(BodyActionCfg):
-    """Configuration for the bounded joint position action term.
-
-    See :class:`JointPositionToLimitsAction` for more details.
+    """直接推力+力矩控制配置 (4维动作空间)
+    
+    动作: [thrust, moment_x, moment_y, moment_z]
     """
 
-    # joint_names: list[str] = MISSING
-    """List of joint names or regex expressions that the action will be mapped to."""
     scale: float | dict[str, float] = 1.0
-    """Scale factor for the action (float or dict of regex expressions). Defaults to 1.0."""
     offset: float | dict[str, float] = 0.0
-    """Offset factor for the action (float or dict of regex expressions). Defaults to 0.0."""
     preserve_order: bool = False
-    """Whether to preserve the order of the joint names in the action output. Defaults to False."""
 
     class_type: type[ActionTerm] = body_actions.ExternalForceTorqueAction
 
     body_name: list[str] = MISSING
     thrust_to_weight: float = 1.9
     moment_scale: float = 0.01
+
+
+@configclass
+class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
+    """速度控制 + 真实动力学配置 (带下层 PID 控制器)
+    
+    策略输出: [vx, vy, vz, yaw_rate] (4维)
+    - vx, vy, vz: 机体坐标系目标速度 (m/s)
+    - yaw_rate: 目标航向角速度 (rad/s)
+    
+    内部控制器将速度命令转换为推力+力矩
+    
+    优点:
+    - 完整的 4 自由度控制
+    - 有真实的动力学响应 (惯性、延迟)
+    - 更好的 Sim-to-Real 迁移
+    
+    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + yaw_rate
+    """
+
+    use_default_offset: bool = True
+    action_dim = 4  # [vx, vy, vz, yaw_rate]
+    
+    # 动作缩放
+    scale_hor: float = 3.0     # 水平速度缩放 (m/s): action=1 → 3 m/s
+    scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
+    scale_yaw: float = 1.5     # 航向角速度缩放 (rad/s): action=1 → 1.5 rad/s ≈ 86°/s
+    
+    # 速度限制
+    max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
+    max_vel_z: float = 2.0     # 垂直最大速度 (m/s)
+    max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s)
+    
+    # 时间步长
+    sim_dt: float = 0.01
+    decimation: int = 10
+    
+    @property
+    def control_dt(self) -> float:
+        return self.sim_dt * self.decimation
+    
+    # ========== 下层控制器 PID 参数 ==========
+    # 参考 PX4 默认参数，确保 Sim-to-Real 一致性
+    # PX4 参数文档: https://docs.px4.io/main/en/advanced_config/parameter_reference.html
+    
+    # 速度控制 PID (对应 PX4 MPC_XY_VEL_*, MPC_Z_VEL_*)
+    # PX4 默认: P=0.95, I=0.05, D=0.02 (水平), P=0.4, I=0.15, D=0.0 (垂直)
+    vel_kp: float = 0.95    # 速度 P 增益 (PX4: MPC_XY_VEL_P_ACC)
+    vel_ki: float = 0.05    # 速度 I 增益 (PX4: MPC_XY_VEL_I_ACC)
+    vel_kd: float = 0.02    # 速度 D 增益 (PX4: MPC_XY_VEL_D_ACC)
+    
+    # 姿态控制 P (对应 PX4 MC_ROLL_P, MC_PITCH_P)
+    # PX4 默认: 6.5
+    att_kp: float = 6.5     # 姿态 P 增益 (PX4: MC_ROLL_P, MC_PITCH_P)
+    att_ki: float = 0.0     # 姿态控制通常不用 I
+    att_kd: float = 0.0     # 姿态控制通常不用 D (用角速度环代替)
+    
+    # 角速度阻尼 (对应 PX4 MC_ROLLRATE_P, MC_PITCHRATE_P)
+    # PX4 默认: 0.15
+    ang_vel_damping: float = 0.15
+    
+    # 推力控制 (对应 PX4 MPC_Z_VEL_P_ACC)
+    # PX4 默认: 4.0
+    thrust_kp: float = 4.0  # 推力 P 增益
+    
+    # 力矩缩放因子
+    # 物理公式: moment = inertia × angular_acceleration × moment_scale
+    # 惯性矩自动从模型读取，此参数用于微调
+    # 1.0 = 理论值, <1.0 = 更保守, >1.0 = 更激进
+    moment_scale: float = 1.0
+    
+    class_type: type[ActionTerm] = body_actions.UAVVelocityWithDynamicsAction
 
