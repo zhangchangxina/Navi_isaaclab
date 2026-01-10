@@ -15,7 +15,7 @@ python scripts/reinforcement_learning/rsl_rl_incremental_model_based_ppo/play_mb
     --task Isaac-Exploration-Rough-Drone-v0 \
     --num_envs 16 \
     --use_cbf --cbf_gamma 0.5 \
-    --checkpoint logs/rsl_rl_incremental_model_based_ppo/drone_rough/2026-01-05_23-17-37_drone_experiment_mbppo/model_10000.pt \
+    --checkpoint logs/rsl_rl/drone_rough/2026-01-06_15-37-13_drone_experiment_ppo/model_9999.pt \
     "$@"
 
 

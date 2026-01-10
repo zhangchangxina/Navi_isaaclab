@@ -159,23 +159,23 @@ class CommandsCfg:
     # )
 
     # 2.在障碍物区域内部随机发布目标点
-    # pose_command = mdp.TerrainBasedPose2dCommandCfg(
-    #     asset_name="robot",
-    #     simple_heading=False,
-    #     resampling_time_range=(180.0, 180.0),
-    #     debug_vis=True,
-    #     ranges=mdp.TerrainBasedPose2dCommandCfg.Ranges(heading=(-3.14, 3.14)),
-    #     offset_z=1.0
-    # )
-
-    # 3.在右上角发布目标点
-    pose_command = mdp.UniformPose2dCommandCfg(
+    pose_command = mdp.TerrainBasedPose2dCommandCfg(
         asset_name="robot",
         simple_heading=False,
         resampling_time_range=(180.0, 180.0),
         debug_vis=True,
-        ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
+        ranges=mdp.TerrainBasedPose2dCommandCfg.Ranges(heading=(-3.14, 3.14)),
+        offset_z=1.0
     )
+
+    # 3.在右上角发布目标点
+    # pose_command = mdp.UniformPose2dCommandCfg(
+    #     asset_name="robot",
+    #     simple_heading=False,
+    #     resampling_time_range=(180.0, 180.0),
+    #     debug_vis=True,
+    #     ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
+    # )
 
 
     traj_command = mdp.TrajectoryVisCommandCfg(
