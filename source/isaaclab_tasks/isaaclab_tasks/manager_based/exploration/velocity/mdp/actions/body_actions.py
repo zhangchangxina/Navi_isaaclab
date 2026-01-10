@@ -546,8 +546,9 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         # 期望加速度 → 期望姿态角 (小角度近似)
         # ax ≈ g * tan(pitch) ≈ g * pitch
         # ay ≈ -g * tan(roll) ≈ -g * roll
-        target_pitch = torch.clamp(desired_acc[:, 0] / self._gravity, -0.5, 0.5)  # 约 ±30°
-        target_roll = torch.clamp(-desired_acc[:, 1] / self._gravity, -0.5, 0.5)
+        # 限制在 ±20° (0.35 rad) 以保证稳定性，防止翻飞机
+        target_pitch = torch.clamp(desired_acc[:, 0] / self._gravity, -0.35, 0.35)  # 约 ±20°
+        target_roll = torch.clamp(-desired_acc[:, 1] / self._gravity, -0.35, 0.35)
         
         # ========== Step 2: 姿态控制 → 力矩 ==========
         # 获取当前姿态角 (从四元数提取 roll, pitch, yaw)
@@ -567,7 +568,7 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         
         # 姿态 PID
         self._att_error_integral += att_error * dt
-        self._att_error_integral = torch.clamp(self._att_error_integral, -0.5, 0.5)
+        self._att_error_integral = torch.clamp(self._att_error_integral, -0.2, 0.2)  # 收紧积分限幅
         att_error_derivative = (att_error - self._last_att_error) / dt
         self._last_att_error = att_error.clone()
         

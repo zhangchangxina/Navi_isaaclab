@@ -222,6 +222,9 @@ class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
     # ========== 下层控制器 PID 参数 ==========
     # 参考 PX4 默认参数，确保 Sim-to-Real 一致性
     # PX4 参数文档: https://docs.px4.io/main/en/advanced_config/parameter_reference.html
+    #
+    # 重要：PX4 使用级联控制 (姿态 → 角速度 → 力矩)
+    # 我们的简化实现跳过角速度环，所以需要调低增益 + 增加阻尼
     
     # 速度控制 PID (对应 PX4 MPC_XY_VEL_*, MPC_Z_VEL_*)
     # PX4 默认: P=0.95, I=0.05, D=0.02 (水平), P=0.4, I=0.15, D=0.0 (垂直)
@@ -229,15 +232,17 @@ class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
     vel_ki: float = 0.05    # 速度 I 增益 (PX4: MPC_XY_VEL_I_ACC)
     vel_kd: float = 0.02    # 速度 D 增益 (PX4: MPC_XY_VEL_D_ACC)
     
-    # 姿态控制 P (对应 PX4 MC_ROLL_P, MC_PITCH_P)
-    # PX4 默认: 6.5
-    att_kp: float = 6.5     # 姿态 P 增益 (PX4: MC_ROLL_P, MC_PITCH_P)
+    # 姿态控制 P (对应 PX4 MC_ROLL_P × MC_ROLLRATE_P 的等效增益)
+    # PX4: 6.5 × 0.15 ≈ 1.0，但因为我们跳过角速度环，需要更保守
+    # 降低增益 + 提高阻尼 来补偿缺失的角速度控制环
+    att_kp: float = 2.5     # 姿态 P 增益 (降低，原 6.5 太激进)
     att_ki: float = 0.0     # 姿态控制通常不用 I
-    att_kd: float = 0.0     # 姿态控制通常不用 D (用角速度环代替)
+    att_kd: float = 0.0     # 姿态控制通常不用 D (用角速度阻尼代替)
     
-    # 角速度阻尼 (对应 PX4 MC_ROLLRATE_P, MC_PITCHRATE_P)
-    # PX4 默认: 0.15
-    ang_vel_damping: float = 0.15
+    # 角速度阻尼 (模拟 PX4 角速度控制环的效果)
+    # 增加阻尼来抑制旋转过冲，防止翻转
+    # 这是防止翻飞机的关键参数！
+    ang_vel_damping: float = 0.8   # 增大阻尼 (原 0.15 太小)
     
     # 推力控制 (对应 PX4 MPC_Z_VEL_P_ACC)
     # PX4 默认: 4.0
@@ -246,8 +251,8 @@ class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
     # 力矩缩放因子
     # 物理公式: moment = inertia × angular_acceleration × moment_scale
     # 惯性矩自动从模型读取，此参数用于微调
-    # 1.0 = 理论值, <1.0 = 更保守, >1.0 = 更激进
-    moment_scale: float = 1.0
+    # 降低到 0.5 作为额外的安全系数
+    moment_scale: float = 0.5   # 更保守的力矩 (原 1.0)
     
     class_type: type[ActionTerm] = body_actions.UAVVelocityWithDynamicsAction
 
