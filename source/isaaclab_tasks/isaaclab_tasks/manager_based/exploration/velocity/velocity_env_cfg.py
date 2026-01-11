@@ -164,16 +164,25 @@ class CommandsCfg:
     #     ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(25.5, 25.5), pos_y=(-25.0, 25.0), heading=(1.57, 4.71)),
     # )
 
-    # 2.在障碍物区域内部随机发布目标点
-    pose_command = mdp.TerrainBasedPose2dCommandCfg(
+    # 2.在障碍物区域内部随机发布目标点 (3D版本，高度随机1-5m)
+    pose_command = mdp.TerrainBasedPoseCommandCfg(
         asset_name="robot",
-        simple_heading=False,
         resampling_time_range=(180.0, 180.0),
         debug_vis=True,
-        ranges=mdp.TerrainBasedPose2dCommandCfg.Ranges(heading=(-3.14, 3.14)),
-        offset_z=1.0
+        ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 5.0)),  # 高度随机1-5m
+        offset_z=0.0  # 高度完全由pos_z控制
     )
 
+    # 3.在右上角发布目标点 (3D版本，高度随机1-5m)
+    # pose_command = mdp.TerrainBasedPoseCommandCfg(
+    #     asset_name="robot",
+    #     resampling_time_range=(180.0, 180.0),
+    #     debug_vis=True,
+    #     ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 5.0)),  # 高度随机1-5m
+    #     offset_z=0.0
+    # )
+
+    
     # 3.在右上角发布目标点
     # pose_command = mdp.UniformPose2dCommandCfg(
     #     asset_name="robot",
@@ -300,6 +309,7 @@ class ObservationsCfg:
     class PolicyCfgUAV(ObsGroup):
         """Observations for UAV policy group (3D navigation)."""
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_height = ObsTerm(func=mdp.base_height)  # 高度观测 (1维)
         # base_ang_vel = ObsTerm(func=mdp.base_ang_vel)  # 质点模型，角速度始终为0
         # projected_gravity = ObsTerm(func=mdp.projected_gravity,)  # 质点模型，姿态不变，始终为[0,0,-1]
         pose_command = ObsTerm(func=mdp.pose_command_position_only, params={"command_name": "pose_command"})
@@ -370,7 +380,7 @@ class EventCfg:
         func=mdp.reset_root_state_from_terrain,
         mode="reset",
         params={
-            "pose_range": {"yaw": (0.0, 0.0)},
+            "pose_range": {"yaw": (-3.14159, 3.14159), "z": (1.0, 5.0)},  # yaw随机, 高度1-5m
             "velocity_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),
@@ -379,7 +389,7 @@ class EventCfg:
                 "pitch": (0.0, 0.0),
                 "yaw": (0.0, 0.0),
             },
-            "offset_z": 0.1,
+            "offset_z": 0.0,  # 高度由pose_range控制，offset设为0
         },
     )
 
@@ -417,10 +427,11 @@ class RewardsCfg:
     # )
     
     # 位置跟踪奖励 - 鼓励机器人接近目标点 (3D空间导航)
+    # 原来 weight=1 太小，相对于 termination_penalty=-200 无法驱动学习
     position_tracking_abs_3d = RewTerm(
         func=mdp.position_command_error_abs,  # 使用3D位置奖励函数
-        weight=1.0,
-        params={"origin_distance": 50.0, "command_name": "pose_command"},  # 减小 origin_distance 让奖励更敏感
+        weight=10.0,  # 增大权重，让位置奖励更显著
+        params={"origin_distance": 20.0, "command_name": "pose_command"},  # 减小 origin_distance 让奖励更敏感
     )
 
     # 到达目标点奖励 - 大奖励鼓励完成任务
@@ -430,8 +441,8 @@ class RewardsCfg:
         params={"threshold": 2, "command_name": "pose_command"},  # 与终止条件保持一致
     )
 
-    # 动作平滑性惩罚 - 鼓励平滑运动
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)  
+    # 动作平滑性惩罚 - 鼓励平滑运动 (训练初期适当降低)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.1)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(
@@ -474,7 +485,7 @@ class TerminationsCfg:
 
     out_of_height_limit = DoneTerm(
         func=mdp.out_of_height_limit,
-        params={"asset_cfg": SceneEntityCfg("robot"), "height_limit": 10.0},
+        params={"asset_cfg": SceneEntityCfg("robot"), "min_height": 1.0, "max_height": 5.0},
     )
 
     least_lidar_depth = DoneTerm(

@@ -56,20 +56,27 @@ def terrain_out_of_bounds(
 
 
 def out_of_height_limit(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), height_limit: float = 3.0
+    env: ManagerBasedRLEnv, 
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), 
+    min_height: float = 1.0,
+    max_height: float = 5.0
 ) -> torch.Tensor:
-    """Terminate when the actor move too close to the edge of the terrain.
+    """Terminate when the actor is outside the height limits.
 
-    If the actor moves too close to the edge of the terrain, the termination is activated. The distance
-    to the edge of the terrain is calculated based on the size of the terrain and the distance buffer.
+    Args:
+        env: The environment object.
+        asset_cfg: The asset configuration.
+        min_height: Minimum allowed height (m).
+        max_height: Maximum allowed height (m).
     """
-
     # extract the used quantities (to enable type-hinting)
     asset: RigidObject = env.scene[asset_cfg.name]
 
-    # check if the agent is out of bounds
-    z_out_of_bounds = torch.abs(asset.data.root_pos_w[:, 2]) > height_limit
-    return z_out_of_bounds
+    # check if the agent is out of height bounds
+    z = asset.data.root_pos_w[:, 2]
+    too_low = z < min_height
+    too_high = z > max_height
+    return torch.logical_or(too_low, too_high)
 
 
 def least_lidar_depth(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:

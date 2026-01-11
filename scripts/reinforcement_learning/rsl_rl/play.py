@@ -147,6 +147,10 @@ def main():
         with torch.inference_mode():
             # agent stepping
             actions = policy(obs)
+            # 测试：把策略输出设为小值，检验PID稳定性
+            # 测试：只让无人机往前走 (vx=0.3, vy=0, vz=0, yaw_rate=0)
+            actions = torch.ones_like(actions) * 0.01
+            # actions[:, 3] = 0.1  # 前进速度，正值往前，负值往后
             # env stepping
             obs, _, _, _ = env.step(actions)
         if args_cli.video:

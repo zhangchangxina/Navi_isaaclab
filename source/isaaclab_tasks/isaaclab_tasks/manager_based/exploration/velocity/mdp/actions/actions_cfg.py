@@ -227,26 +227,20 @@ class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
     # 我们的简化实现跳过角速度环，所以需要调低增益 + 增加阻尼
     
     # 速度控制 PID (对应 PX4 MPC_XY_VEL_*, MPC_Z_VEL_*)
-    # PX4 默认: P=0.95, I=0.05, D=0.02 (水平), P=0.4, I=0.15, D=0.0 (垂直)
-    vel_kp: float = 0.95    # 速度 P 增益 (PX4: MPC_XY_VEL_P_ACC)
-    vel_ki: float = 0.05    # 速度 I 增益 (PX4: MPC_XY_VEL_I_ACC)
-    vel_kd: float = 0.02    # 速度 D 增益 (PX4: MPC_XY_VEL_D_ACC)
+    vel_kp: float = 0.8     # 速度 P 增益，减小避免过冲
+    vel_ki: float = 0.05    # 速度 I 增益
+    vel_kd: float = 0.02    # 速度 D 增益
     
-    # 姿态控制 P (对应 PX4 MC_ROLL_P × MC_ROLLRATE_P 的等效增益)
-    # PX4: 6.5 × 0.15 ≈ 1.0，但因为我们跳过角速度环，需要更保守
-    # 降低增益 + 提高阻尼 来补偿缺失的角速度控制环
-    att_kp: float = 2.5     # 姿态 P 增益 (降低，原 6.5 太激进)
+    # 姿态控制 P
+    att_kp: float = 2.0     # 姿态 P 增益，减小避免振荡
     att_ki: float = 0.0     # 姿态控制通常不用 I
-    att_kd: float = 0.0     # 姿态控制通常不用 D (用角速度阻尼代替)
+    att_kd: float = 0.0     # 姿态控制通常不用 D
     
-    # 角速度阻尼 (模拟 PX4 角速度控制环的效果)
-    # 增加阻尼来抑制旋转过冲，防止翻转
-    # 这是防止翻飞机的关键参数！
-    ang_vel_damping: float = 0.8   # 增大阻尼 (原 0.15 太小)
+    # 角速度阻尼 - 关键参数！防止翻飞机
+    ang_vel_damping: float = 1.5   # 大幅增大阻尼
     
-    # 推力控制 (对应 PX4 MPC_Z_VEL_P_ACC)
-    # PX4 默认: 4.0
-    thrust_kp: float = 4.0  # 推力 P 增益
+    # 推力控制
+    thrust_kp: float = 8.0  # 推力 P 增益，更强的高度保持
     
     # 力矩缩放因子
     # 物理公式: moment = inertia × angular_acceleration × moment_scale
