@@ -108,13 +108,7 @@ class MySceneCfg(InteractiveSceneCfg):
     lidar_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         update_period=1 / 60,
-        # MID360 安装位置和姿态 (参考 SU17 官方文档)
-        # 位置: x=0.13m(前), y=0, z=0.23m(上)
-        # 姿态: 15° 前倾 (pitch), 四元数 (w,x,y,z) = (0.9914, 0, 0.1305, 0)
-        offset=RayCasterCfg.OffsetCfg(
-            pos=(0.13, 0, 0.23),
-            rot=(0.9914, 0, 0.1305, 0),  # 15° pitch forward tilt
-        ),
+        # offset 由各机器人类型单独配置 (drone/turtlebot)
         mesh_prim_paths=["/World/ground/forest"],
         ray_alignment='yaw',
         # Debug visualization is useful for interactive play, but can break headless training.
@@ -164,40 +158,31 @@ class CommandsCfg:
     #     ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(25.5, 25.5), pos_y=(-25.0, 25.0), heading=(1.57, 4.71)),
     # )
 
-    # 2.在障碍物区域内部随机发布目标点 (3D版本，高度随机1-5m)
-    pose_command = mdp.TerrainBasedPoseCommandCfg(
-        asset_name="robot",
-        resampling_time_range=(180.0, 180.0),
-        debug_vis=True,
-        ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 5.0)),  # 高度随机1-5m
-        offset_z=0.0  # 高度完全由pos_z控制
-    )
-
-    # 3.在右上角发布目标点 (3D版本，高度随机1-5m)
-    # pose_command = mdp.TerrainBasedPoseCommandCfg(
-    #     asset_name="robot",
-    #     resampling_time_range=(180.0, 180.0),
-    #     debug_vis=True,
-    #     ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 5.0)),  # 高度随机1-5m
-    #     offset_z=0.0
-    # )
-
-    
-    # 3.在右上角发布目标点
-    # pose_command = mdp.UniformPose2dCommandCfg(
+    # 2.在障碍物区域内部随机发布目标点
+    # pose_command = mdp.TerrainBasedPose2dCommandCfg(
     #     asset_name="robot",
     #     simple_heading=False,
     #     resampling_time_range=(180.0, 180.0),
     #     debug_vis=True,
-    #     ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
+    #     ranges=mdp.TerrainBasedPose2dCommandCfg.Ranges(heading=(-3.14, 3.14)),
+    #     offset_z=1.0
     # )
+
+    # 3.在右上角发布目标点
+    pose_command = mdp.UniformPose2dCommandCfg(
+        asset_name="robot",
+        simple_heading=False,
+        resampling_time_range=(180.0, 180.0),
+        debug_vis=True,
+        ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
+    )
 
 
     traj_command = mdp.TrajectoryVisCommandCfg(
         asset_name="robot",
         resampling_time_range=(0.1, 0.1),
         max_length=1000,
-        threshold=1.0,  # 增大阈值，只有重置时（位置跳跃>10m）才清除轨迹
+        threshold=3.0,  # 增大阈值，只有重置时（位置跳跃>10m）才清除轨迹
     )
 
 
@@ -253,7 +238,7 @@ class ActionsCfg:
     # UAV Action 选择 (三选一)
     # ============================================================
     
-    # 方案 1: 质点模型 - 直接写入速度 (无动力学, 训练快)
+    # 方案 1: 质点模型 - 直接写入速度，航向自动跟随 (无动力学, 3维动作)
     # uav_action = mdp.UAVBodyActionCfg(
     #     asset_name="robot", 
     #     body_name=["body"],
@@ -266,10 +251,27 @@ class ActionsCfg:
     #     acc_down=_UAV_ACC_DOWN,
     # )
     
-    # 方案 2: 策略输出速度+yaw_rate + 仿真用力矩 (有动力学, 推荐!)
+    # 方案 2: 策略输出速度+yaw_rate + 仿真用力矩 (有动力学, 4维动作, 推荐!)
     # 动作空间: [vx, vy, vz, yaw_rate] (4维)
     # PID 参数匹配 PX4 默认值，确保 Sim-to-Real 一致性
-    uav_action = mdp.UAVVelocityWithDynamicsActionCfg(
+    # uav_action = mdp.UAVVelocityWithDynamicsActionCfg(
+    #     asset_name="robot", 
+    #     body_name=["body"],
+    #     scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 3 m/s
+    #     scale_z=_UAV_MAX_VEL_Z,        # 垂直速度缩放：action=1 → 2 m/s
+    #     scale_yaw=1.5,                 # 航向角速度缩放：action=1 → 1.5 rad/s
+    #     max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
+    #     max_vel_z=_UAV_MAX_VEL_Z,      # 垂直最大速度限制
+    #     max_yaw_rate=1.5,              # 最大航向角速度 (rad/s)
+    #     # 下层 PID 参数 (匹配 PX4 默认值)
+    #     # 使用默认值即可，已在 UAVVelocityWithDynamicsActionCfg 中设置
+    # )
+    
+    # 方案 3: 质点模型 + 策略可控 yaw_rate (无动力学, 4维动作, 训练快!)
+    # 动作空间: [vx, vy, vz, yaw_rate] (4维)
+    # 相比方案1：策略可直接控制航向（而非自动跟随）
+    # 相比方案2：质点模型无动力学延迟，训练更快
+    uav_action = mdp.UAVBodyActionWithYawRateCfg(
         asset_name="robot", 
         body_name=["body"],
         scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 3 m/s
@@ -278,8 +280,9 @@ class ActionsCfg:
         max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
         max_vel_z=_UAV_MAX_VEL_Z,      # 垂直最大速度限制
         max_yaw_rate=1.5,              # 最大航向角速度 (rad/s)
-        # 下层 PID 参数 (匹配 PX4 默认值)
-        # 使用默认值即可，已在 UAVVelocityWithDynamicsActionCfg 中设置
+        acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
+        acc_up=_UAV_ACC_UP,            # 向上加速度限制
+        acc_down=_UAV_ACC_DOWN,        # 向下加速度限制
     )
 
 
@@ -308,10 +311,10 @@ class ObservationsCfg:
     @configclass
     class PolicyCfgUAV(ObsGroup):
         """Observations for UAV policy group (3D navigation)."""
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_height = ObsTerm(func=mdp.base_height)  # 高度观测 (1维)
-        # base_ang_vel = ObsTerm(func=mdp.base_ang_vel)  # 质点模型，角速度始终为0
-        # projected_gravity = ObsTerm(func=mdp.projected_gravity,)  # 质点模型，姿态不变，始终为[0,0,-1]
+        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel)          # 线速度 (3维)
+        # base_ang_vel = ObsTerm(func=mdp.base_ang_vel)          # 角速度 (3维)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity) # 姿态 (3维)
+        base_height = ObsTerm(func=mdp.base_height)            # 高度 (1维)
         pose_command = ObsTerm(func=mdp.pose_command_position_only, params={"command_name": "pose_command"})
         actions = ObsTerm(func=mdp.last_action)
         lidar_scan = ObsTerm(
@@ -430,8 +433,8 @@ class RewardsCfg:
     # 原来 weight=1 太小，相对于 termination_penalty=-200 无法驱动学习
     position_tracking_abs_3d = RewTerm(
         func=mdp.position_command_error_abs,  # 使用3D位置奖励函数
-        weight=10.0,  # 增大权重，让位置奖励更显著
-        params={"origin_distance": 20.0, "command_name": "pose_command"},  # 减小 origin_distance 让奖励更敏感
+        weight=1.0,  
+        params={"origin_distance": 50.0, "command_name": "pose_command"},  
     )
 
     # 到达目标点奖励 - 大奖励鼓励完成任务
@@ -442,7 +445,10 @@ class RewardsCfg:
     )
 
     # 动作平滑性惩罚 - 鼓励平滑运动 (训练初期适当降低)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.1)  
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)
+    
+    # 动作幅度惩罚 - 限制动作大小，鼓励高效控制
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.5)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(
@@ -453,11 +459,11 @@ class RewardsCfg:
     
 
     # 朝向奖励 - 鼓励机器人朝向目标
-    # orientation_tracking = RewTerm(
-    #     func=mdp.heading_command_error_abs,
-    #     weight=-0.5,  # 朝向误差惩罚
-    #     params={"command_name": "pose_command"},
-    # )
+    orientation_tracking = RewTerm(
+        func=mdp.heading_command_error_abs,
+        weight=-0.1,  # 朝向误差惩罚
+        params={"command_name": "pose_command"},
+    )
     
     #
 

@@ -147,11 +147,63 @@ def main():
         with torch.inference_mode():
             # agent stepping
             actions = policy(obs)
-            # 测试：把策略输出设为小值，检验PID稳定性
-            # 测试：只让无人机往前走 (vx=0.3, vy=0, vz=0, yaw_rate=0)
-            actions = torch.ones_like(actions) * 0.01
-            # actions[:, 3] = 0.1  # 前进速度，正值往前，负值往后
-            # env stepping
+            
+            # ===== 低通滤波：平滑策略输出 =====
+            FILTER_ALPHA = 0.3  # 滤波系数 (0~1, 越小越平滑)
+            if not hasattr(env, '_filtered_actions'):
+                env._filtered_actions = actions.clone()
+            env._filtered_actions = FILTER_ALPHA * actions + (1 - FILTER_ALPHA) * env._filtered_actions
+            actions = env._filtered_actions.clone()
+            
+            
+            # # 测试PID稳定性
+            # # 0=悬停, 1=前进, 2=原地旋转, 3=后退, 4=左移, 5=右移
+            # # 6=上升, 7=下降, 8=前进+旋转, 9=策略输出(带滤波), 10=策略输出(无滤波)
+            # TEST_MODE = 9
+            # if TEST_MODE == 0:
+            #     # 纯悬停
+            #     actions = torch.zeros_like(actions)
+            # elif TEST_MODE == 1:
+            #     # 前进 vx=0.6 m/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 0] = 0.2
+            # elif TEST_MODE == 2:
+            #     # 原地旋转 yaw_rate=0.3 rad/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 3] = 0.2
+            # elif TEST_MODE == 3:
+            #     # 后退 vx=-0.6 m/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 0] = -0.2
+            # elif TEST_MODE == 4:
+            #     # 左移 vy=0.6 m/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 1] = 0.2
+            # elif TEST_MODE == 5:
+            #     # 右移 vy=-0.6 m/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 1] = -0.2
+            # elif TEST_MODE == 6:
+            #     # 上升 vz=0.4 m/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 2] = 0.2
+            # elif TEST_MODE == 7:
+            #     # 下降 vz=-0.4 m/s
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 2] = -0.2
+            # elif TEST_MODE == 8:
+            #     # 前进+旋转 (综合测试) - 降低强度
+            #     actions = torch.zeros_like(actions)
+            #     actions[:, 0] = 0.1   # vx=0.3 m/s (降低)
+            #     actions[:, 3] = 0.05  # yaw_rate=0.075 rad/s (降低)
+            # elif TEST_MODE == 9:
+            #     # 策略输出 (带滤波，已在上面应用)
+            #     pass
+            # elif TEST_MODE == 10:
+            #     # 策略输出 (无滤波，直接用原始策略输出)
+            #     actions = policy(obs)
+
+
             obs, _, _, _ = env.step(actions)
         if args_cli.video:
             timestep += 1

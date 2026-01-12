@@ -40,7 +40,7 @@ FOREST_TERRAINS_CFG = TerrainGeneratorCfg(
     sub_terrains={
         "hf_forest0": terrain_gen.MeshForestTerrainCfg(
             proportion=0.25, 
-            obstacle_height_range=(2.0, 5.0), 
+            obstacle_height_range=(2.0, 6.0), 
             obstacle_radius_range=(0.25, 1.0), 
             num_obstacles=250,
             flat_patch_sampling = {

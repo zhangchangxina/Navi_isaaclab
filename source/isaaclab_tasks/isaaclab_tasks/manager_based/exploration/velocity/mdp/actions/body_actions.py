@@ -386,6 +386,107 @@ class UAVBodyAction(BodyAction):
         self._asset.write_root_link_velocity_to_sim(root_velocities)
 
 
+class UAVBodyActionWithYawRate(BodyAction):
+    """UAV速度模式动作 + 策略可控 yaw_rate（质点模型，无动力学）。
+    
+    相比 UAVBodyAction：
+    - ✅ 策略可以直接控制航向角速度（而非自动跟随速度方向）
+    - ✅ 4维动作空间，与 UAVVelocityWithDynamicsAction 一致
+    - ✅ 质点模型，训练更快
+    
+    动作空间: [vx, vy, vz, yaw_rate] (4维)
+    - vx, vy, vz: 机体坐标系目标速度 (m/s)
+    - yaw_rate: 目标航向角速度 (rad/s)
+    
+    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + yaw_rate
+    """
+
+    cfg: actions_cfg.UAVBodyActionWithYawRateCfg
+    """The configuration of the action term."""
+
+    def __init__(self, cfg: actions_cfg.UAVBodyActionWithYawRateCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        if cfg.use_default_offset:
+            self._offset = self._asset.data.default_root_state[:, self._body_idx].clone()
+
+    def process_actions(self, actions: torch.Tensor):
+        """处理策略输出: [vx, vy, vz, yaw_rate]"""
+        self._raw_actions[:] = actions
+        # 水平方向 (x, y) 使用 scale_hor
+        self._processed_actions[:, 0] = actions[:, 0] * self.cfg.scale_hor
+        self._processed_actions[:, 1] = actions[:, 1] * self.cfg.scale_hor
+        # 垂直方向 (z) 使用 scale_z
+        self._processed_actions[:, 2] = actions[:, 2] * self.cfg.scale_z
+        # 航向角速度 使用 scale_yaw
+        self._processed_actions[:, 3] = actions[:, 3] * self.cfg.scale_yaw
+
+    def apply_actions(self):
+        """Apply velocity commands with PX4-style limits + policy-controlled yaw_rate.
+        
+        质点模型：直接写入速度，无动力学延迟
+        """
+        # 获取当前速度 (body frame)
+        current_vel = self._asset.data.root_lin_vel_b.clone()  # (num_envs, 3)
+        current_ang_vel = self._asset.data.root_ang_vel_b[:, 2]  # z轴角速度
+        quat = self._asset.data.root_link_quat_w
+
+        # 目标速度向量 (机体系)
+        target_vel = self.processed_actions[:, 0:3]  # (num_envs, 3)
+        # 目标航向角速度 (策略输出)
+        target_yaw_rate = self.processed_actions[:, 3]
+        
+        # 获取物理限制参数
+        acc_hor = self.cfg.acc_hor_per_step
+        acc_up = self.cfg.acc_up_per_step
+        acc_down = self.cfg.acc_down_per_step
+        max_vel_hor = self.cfg.max_vel_hor
+        max_vel_z = self.cfg.max_vel_z
+        max_yaw_rate = self.cfg.max_yaw_rate
+        
+        new_vel = torch.zeros_like(current_vel)
+        
+        # ========== Step 1: 水平方向加速度限制 (向量限制) ==========
+        delta_vel_hor = target_vel[:, :2] - current_vel[:, :2]
+        delta_magnitude = torch.norm(delta_vel_hor, dim=1, keepdim=True)
+        acc_scale = torch.clamp(acc_hor / (delta_magnitude + 1e-6), max=1.0)
+        new_vel[:, :2] = current_vel[:, :2] + delta_vel_hor * acc_scale
+        
+        # ========== Step 2: 水平速度上限 (向量限制) ==========
+        vel_hor_magnitude = torch.norm(new_vel[:, :2], dim=1, keepdim=True)
+        vel_scale = torch.clamp(max_vel_hor / (vel_hor_magnitude + 1e-6), max=1.0)
+        new_vel[:, :2] = new_vel[:, :2] * vel_scale
+        
+        # ========== Step 3: 垂直方向加速度限制 (非对称) ==========
+        new_vel[:, 2] = torch.clamp(
+            target_vel[:, 2],
+            min=current_vel[:, 2] - acc_down,
+            max=current_vel[:, 2] + acc_up
+        )
+        
+        # ========== Step 4: 垂直速度上限 ==========
+        new_vel[:, 2] = torch.clamp(new_vel[:, 2], min=-max_vel_z, max=max_vel_z)
+        
+        # ========== Step 5: 航向角速度限制 ==========
+        # 角速度上限
+        target_yaw_rate = torch.clamp(target_yaw_rate, -max_yaw_rate, max_yaw_rate)
+        
+        # 角速度加速度限制 (平滑)
+        yaw_acc = self.cfg.yaw_acc_per_step
+        new_yaw_rate = torch.clamp(
+            target_yaw_rate,
+            min=current_ang_vel - yaw_acc,
+            max=current_ang_vel + yaw_acc
+        )
+        
+        # ========== 构建速度命令 ==========
+        root_velocities = torch.zeros(self.num_envs, 6, device=self.device)
+        root_velocities[:, 0:3] = new_vel       # 机体系线速度
+        root_velocities[:, 5] = new_yaw_rate    # z轴角速度
+
+        # 从 body frame 转换到 world frame (只转换线速度)
+        root_velocities[:, 0:3] = math_utils.quat_apply(quat, root_velocities[:, 0:3])
+
+        self._asset.write_root_link_velocity_to_sim(root_velocities)
 
 
 
@@ -450,28 +551,38 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         
         # 获取机体信息 (使用配置中的 body_name，由父类解析)
         self._body_id = self._body_idx[0]
-        self._robot_mass = self._asset.root_physx_view.get_masses()[0].sum()
+        # 获取总质量（用于悬停推力计算）
+        masses = self._asset.root_physx_view.get_masses()
+        # masses shape: [num_envs, num_bodies]
+        self._robot_mass = masses[0].sum().item()  # 所有刚体质量之和
         self._gravity = 9.81
-        self._robot_weight = (self._robot_mass * self._gravity).item()
+        self._robot_weight = self._robot_mass * self._gravity
         
         # 获取惯性矩 (用于力矩计算)
-        # inertias 格式: [Ixx, Iyy, Izz, Ixy, Ixz, Iyz] 或 [Ixx, Iyy, Izz]
-        try:
-            inertias = self._asset.root_physx_view.get_inertias()
-            if inertias is not None and len(inertias) > 0:
-                # 取主惯性矩 [Ixx, Iyy, Izz]
-                self._inertia = inertias[0, :3].clone()  # shape: (3,)
-                omni.log.info(f"UAV inertia: Ixx={self._inertia[0]:.4f}, Iyy={self._inertia[1]:.4f}, Izz={self._inertia[2]:.4f}")
-            else:
-                # 使用默认惯性 (基于 P450 估算)
-                self._inertia = torch.tensor([0.01, 0.01, 0.02], device=self.device)
-                omni.log.warn("Could not get inertia, using default values")
-        except Exception as e:
-            # 使用默认惯性
-            self._inertia = torch.tensor([0.01, 0.01, 0.02], device=self.device)
-            omni.log.warn(f"Failed to get inertia: {e}, using default values")
+        # 重要：必须和物理引擎中的惯性矩一致！
+        # 惯性张量格式: [Ixx, Ixy, Ixz, Iyx, Iyy, Iyz, Izx, Izy, Izz] (3x3矩阵展开)
+        # 我们只需要对角元素: [Ixx, Iyy, Izz] = [0, 4, 8]
+        # 从物理引擎获取惯性矩，必须成功，否则报错
+        inertias = self._asset.root_physx_view.get_inertias()
+        # inertias shape: [num_envs, num_bodies, 9]
+        # 惯性张量格式: [Ixx, Ixy, Ixz, Iyx, Iyy, Iyz, Izx, Izy, Izz]
+        # num_bodies 顺序: base(0), body(1)
+        if inertias is None or len(inertias) == 0:
+            raise RuntimeError("无法从物理引擎获取惯性矩！请检查USD模型的Mass属性设置。")
+        # body 是第二个刚体 (index=1)，取对角元素 [0, 4, 8]
+        body_inertia = inertias[0, 1, :]  # 第一个环境的 body (index=1)
+        self._inertia = torch.tensor([
+            body_inertia[0].item(),  # Ixx
+            body_inertia[4].item(),  # Iyy
+            body_inertia[8].item(),  # Izz
+        ], device=self.device)
         
-        omni.log.info(f"UAV mass: {self._robot_mass:.3f} kg, weight: {self._robot_weight:.3f} N")
+        # 打印物理参数
+        print(f"\n{'='*60}")
+        print(f"[UAV] 质量: {self._robot_mass:.3f} kg")
+        print(f"[UAV] 重力: {self._robot_weight:.3f} N")
+        print(f"[UAV] 惯性矩: Ixx={self._inertia[0].item():.4f}, Iyy={self._inertia[1].item():.4f}, Izz={self._inertia[2].item():.4f}")
+        print(f"{'='*60}\n")
         
         # PID 控制器状态
         self._vel_error_integral = torch.zeros(self.num_envs, 3, device=self.device)
@@ -530,7 +641,6 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         Kp_vel = self.cfg.vel_kp
         Ki_vel = self.cfg.vel_ki
         Kd_vel = self.cfg.vel_kd
-        
         desired_acc = Kp_vel * vel_error + Ki_vel * self._vel_error_integral + Kd_vel * vel_error_derivative
         
         # ========== Step 1.5: 加速度限制 (与 PX4 一致) ==========
@@ -552,6 +662,14 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         # ========== Step 2: 姿态控制 → 力矩 ==========
         # 获取当前姿态角 (从四元数提取 roll, pitch, yaw)
         current_roll, current_pitch, _ = math_utils.euler_xyz_from_quat(quat)
+        
+        # ===== 紧急恢复机制 =====
+        # 当姿态过大 (>45°) 时，忽略速度指令，优先恢复水平
+        EMERGENCY_ANGLE = 0.78  # 约 45°
+        is_emergency = (torch.abs(current_roll) > EMERGENCY_ANGLE) | (torch.abs(current_pitch) > EMERGENCY_ANGLE)
+        # 紧急模式下，目标姿态强制为 0 (水平)
+        target_roll = torch.where(is_emergency, torch.zeros_like(target_roll), target_roll)
+        target_pitch = torch.where(is_emergency, torch.zeros_like(target_pitch), target_pitch)
         
         # 姿态误差 (roll, pitch)
         roll_error = target_roll - current_roll
@@ -575,8 +693,7 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         Ki_att = self.cfg.att_ki
         Kd_att = self.cfg.att_kd
         
-        # 力矩 = (PID输出 - 角速度阻尼) × 惯性矩
-        # 物理公式: moment = inertia × angular_acceleration
+        # 力矩 = PID输出 - 角速度阻尼
         angular_acc_cmd = (Kp_att * att_error + Ki_att * self._att_error_integral + 
                            Kd_att * att_error_derivative - self.cfg.ang_vel_damping * current_ang_vel_b)
         
@@ -585,16 +702,24 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         
         # 力矩 = 惯性 × 角加速度 × 缩放因子
         moment = angular_acc_cmd * inertia * self.cfg.moment_scale
+        # 力矩限制，防止过大导致失控
+        # 惯性矩约 0.03 kg·m²，最大角加速度 15 rad/s²
+        # max_moment = 15 × 0.03 = 0.45 N·m
+        max_moment = 0.45  # 最大力矩 (N·m)
+        moment = torch.clamp(moment, -max_moment, max_moment)
         
         # ========== Step 3: 高度控制 → 推力 ==========
         # 目标 z 速度 → 推力
         vz_error = target_vel_b[:, 2] - current_vel_b[:, 2]
         
         # 基础悬停推力 + 速度补偿
-        hover_thrust = self._robot_weight / torch.cos(current_roll) / torch.cos(current_pitch)
+        # 安全限制：cos 最小值限制为0.5（对应60度倾斜），避免除零导致推力爆炸
+        cos_roll_safe = torch.clamp(torch.cos(current_roll), min=0.5)
+        cos_pitch_safe = torch.clamp(torch.cos(current_pitch), min=0.5)
+        hover_thrust = self._robot_weight / cos_roll_safe / cos_pitch_safe
         thrust_compensation = self.cfg.thrust_kp * vz_error * self._robot_mass
         total_thrust = hover_thrust + thrust_compensation
-        total_thrust = torch.clamp(total_thrust, 0, self._robot_weight * 2.0)  # 限制推力
+        total_thrust = torch.clamp(total_thrust, 0.5 * self._robot_weight, 1.8 * self._robot_weight)  # 更严格限制
         
         # ========== 应用力和力矩 ==========
         _thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
@@ -604,6 +729,17 @@ class UAVVelocityWithDynamicsAction(BodyAction):
         _moment[:, 0, :] = moment
         
         self._asset.set_external_force_and_torque(_thrust, _moment, body_ids=self._body_id)
+        
+        # DEBUG: 每100步打印一次
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        if self._debug_counter % 100 == 0:
+            import numpy as np
+            np.set_printoptions(precision=3, suppress=True)
+            print(f"[DEBUG] vel_err={vel_error[0].cpu().numpy()}, att_err={att_error[0].cpu().numpy()}")
+            print(f"[DEBUG] moment={moment[0].cpu().numpy()}, thrust={total_thrust[0].item():.2f}")
+            print(f"[DEBUG] roll={current_roll[0].item():.3f}, pitch={current_pitch[0].item():.3f}")
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         """重置 PID 状态"""

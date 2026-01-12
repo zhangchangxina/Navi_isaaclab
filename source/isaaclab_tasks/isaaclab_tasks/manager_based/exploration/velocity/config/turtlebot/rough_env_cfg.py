@@ -28,7 +28,12 @@ class TurtlebotRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         self.observations.policy_uav = None
 
         # Turtlebot雷达配置 - 适合地面导航
-        from isaaclab.sensors import patterns
+        from isaaclab.sensors import RayCasterCfg, patterns
+        # UGV 雷达水平安装，无前倾
+        self.scene.lidar_scanner.offset = RayCasterCfg.OffsetCfg(
+            pos=(0.0, 0.0, 0.0),   # 雷达在 base_scan 坐标系原点
+            rot=(1.0, 0, 0, 0),   # 无旋转（水平）
+        )
         self.scene.lidar_scanner.pattern_cfg = patterns.LidarPatternCfg(
             # 低分辨率配置（与训练时一致，用于加载检查点）
             channels=1, vertical_fov_range=(0.0, 1.0), horizontal_fov_range=(-180.0, 180.0), horizontal_res=10.0

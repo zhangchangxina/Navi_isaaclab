@@ -25,7 +25,14 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
 
         # Drone雷达配置 - 基于真实 Livox MID360 参数
         # 参考: https://docs.amovlab.com/su17u-v2-wiki/#/src/硬件介绍/SU17-GPS-MID360科研版
-        from isaaclab.sensors import patterns
+        from isaaclab.sensors import RayCasterCfg, patterns
+        # MID360 安装位置和姿态 (参考 SU17 官方文档)
+        # 位置: x=0.13m(前), y=0, z=0.23m(上)
+        # 姿态: 15° 前倾 (pitch), 四元数 (w,x,y,z) = (0.9914, 0, 0.1305, 0)
+        self.scene.lidar_scanner.offset = RayCasterCfg.OffsetCfg(
+            pos=(0.13, 0, 0.23),
+            rot=(0.9914, 0, 0.1305, 0),  # 15° pitch forward tilt
+        )
         self.scene.lidar_scanner.pattern_cfg = patterns.LidarPatternCfg(
             # MID360 原始 FOV: 垂直 -7°~52°, 水平 360°
             channels=8, vertical_fov_range=(-7.0, 52.0), horizontal_fov_range=(-180.0, 180.0), horizontal_res=10.0

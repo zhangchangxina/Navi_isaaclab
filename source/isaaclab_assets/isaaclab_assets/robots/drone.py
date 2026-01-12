@@ -49,13 +49,7 @@ DRONE_CFG = ArticulationCfg(
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 2.0),
     ),
-    actuators={
-        "dummy": ImplicitActuatorCfg(
-            joint_names_expr=[".*"],
-            stiffness=0.0,
-            damping=0.0,
-        ),
-    },
+    actuators={},  # 无人机没有关节，不需要actuator
 )
 
 
