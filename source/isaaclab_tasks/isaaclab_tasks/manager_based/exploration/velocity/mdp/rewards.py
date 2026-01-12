@@ -125,17 +125,18 @@ def position_command_error_tanh(env: ManagerBasedRLEnv, std: float, command_name
 
 
 def heading_command_error_abs(env: ManagerBasedRLEnv, command_name: str) -> torch.Tensor:
-    """Penalize tracking orientation error."""
+    """Penalize heading error: angle between robot heading and direction to target.
+    
+    计算机器人朝向与目标点连线方向的夹角。
+    command[:, :2] 是目标点在机器人坐标系下的相对位置 (x, y)。
+    atan2(y, x) 得到目标点的方位角：
+      - 0: 目标在正前方
+      - ±π: 目标在正后方
+    """
     command = env.command_manager.get_command(command_name)
-    # Support both pose commands with explicit heading (>=4 dims)
-    # and position-only commands (3 dims). For the latter, infer heading
-    # from the planar direction to the goal using atan2(y, x).
-    if command.size(1) >= 4:
-        heading_signal = command[:, 3]
-    else:
-        # command expected as (x, y, z?) — use x,y to derive desired yaw
-        heading_signal = torch.atan2(command[:, 1], command[:, 0])
-    return heading_signal.abs()
+    # 直接用目标位置计算方位角（当前点→目标点连线 vs 机器人朝向）
+    heading_error = torch.atan2(command[:, 1], command[:, 0])
+    return heading_error.abs()
 
 
 def lin_vel_xy_l2(

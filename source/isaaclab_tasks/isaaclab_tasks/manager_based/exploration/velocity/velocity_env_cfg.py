@@ -171,7 +171,7 @@ class CommandsCfg:
     # 3.在右上角发布目标点
     pose_command = mdp.UniformPose2dCommandCfg(
         asset_name="robot",
-        simple_heading=False,
+        simple_heading=False,  # True: 目标 heading 自动朝向目标点（雷达倾斜需朝向感知）
         resampling_time_range=(180.0, 180.0),
         debug_vis=True,
         ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
@@ -461,7 +461,7 @@ class RewardsCfg:
     # 朝向奖励 - 鼓励机器人朝向目标
     orientation_tracking = RewTerm(
         func=mdp.heading_command_error_abs,
-        weight=-0.1,  # 朝向误差惩罚
+        weight=-0.5,  # 朝向误差惩罚
         params={"command_name": "pose_command"},
     )
     
