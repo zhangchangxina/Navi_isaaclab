@@ -383,7 +383,7 @@ class EventCfg:
         func=mdp.reset_root_state_from_terrain,
         mode="reset",
         params={
-            "pose_range": {"yaw": (-3.14159, 3.14159), "z": (1.0, 5.0)},  # yaw随机, 高度1-5m
+            "pose_range": {"yaw": (-3.14159, 3.14159), "z": (1.5, 3.5)},  # yaw随机, 高度1-5m
             "velocity_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),
