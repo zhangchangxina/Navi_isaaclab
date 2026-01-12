@@ -148,12 +148,12 @@ def main():
             # agent stepping
             actions = policy(obs)
             
-            # ===== 低通滤波：平滑策略输出 =====
-            FILTER_ALPHA = 0.3  # 滤波系数 (0~1, 越小越平滑)
-            if not hasattr(env, '_filtered_actions'):
-                env._filtered_actions = actions.clone()
-            env._filtered_actions = FILTER_ALPHA * actions + (1 - FILTER_ALPHA) * env._filtered_actions
-            actions = env._filtered_actions.clone()
+            # # ===== 低通滤波：平滑策略输出 =====
+            # FILTER_ALPHA = 0.3  # 滤波系数 (0~1, 越小越平滑)
+            # if not hasattr(env, '_filtered_actions'):
+            #     env._filtered_actions = actions.clone()
+            # env._filtered_actions = FILTER_ALPHA * actions + (1 - FILTER_ALPHA) * env._filtered_actions
+            # actions = env._filtered_actions.clone()
             
             
             # # 测试PID稳定性

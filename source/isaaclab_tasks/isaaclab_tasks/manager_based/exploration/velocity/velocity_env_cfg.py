@@ -445,10 +445,10 @@ class RewardsCfg:
     )
 
     # 动作平滑性惩罚 - 鼓励平滑运动 (训练初期适当降低)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.5)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1)
     
     # 动作幅度惩罚 - 限制动作大小，鼓励高效控制
-    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.5)  
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.2)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(
@@ -461,7 +461,7 @@ class RewardsCfg:
     # 朝向奖励 - 鼓励机器人朝向目标
     orientation_tracking = RewTerm(
         func=mdp.heading_command_error_abs,
-        weight=-0.5,  # 朝向误差惩罚
+        weight=-0.3,  # 朝向误差惩罚
         params={"command_name": "pose_command"},
     )
     
