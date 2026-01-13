@@ -487,7 +487,8 @@ class UAVBodyActionWithYawRate(BodyAction):
         acc_up = self.cfg.acc_up_per_step
         acc_down = self.cfg.acc_down_per_step
         max_vel_hor = self.cfg.max_vel_hor
-        max_vel_z = self.cfg.max_vel_z
+        max_vel_up = self.cfg.max_vel_up
+        max_vel_down = self.cfg.max_vel_down
         max_yaw_rate = self.cfg.max_yaw_rate
         
         new_vel = torch.zeros_like(current_vel)
@@ -510,8 +511,9 @@ class UAVBodyActionWithYawRate(BodyAction):
             max=current_vel[:, 2] + acc_up
         )
         
-        # ========== Step 4: 垂直速度上限 ==========
-        new_vel[:, 2] = torch.clamp(new_vel[:, 2], min=-max_vel_z, max=max_vel_z)
+        # ========== Step 4: 垂直速度上限 (非对称) ==========
+        # 正值 = 上升，负值 = 下降
+        new_vel[:, 2] = torch.clamp(new_vel[:, 2], min=-max_vel_down, max=max_vel_up)
         
         # ========== Step 5: 航向控制 (yaw → yaw_rate via P controller) ==========
         # 目标 yaw = 目标点方向 + 策略偏移量

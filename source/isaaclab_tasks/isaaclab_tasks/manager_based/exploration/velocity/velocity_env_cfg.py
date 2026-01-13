@@ -210,8 +210,9 @@ _UGV_ANG_ACTION_SCALE = _UGV_MAX_ANG_VEL  # 2.0
 # 基于 PX4 飞控标准参数
 # --------------------------------------------------------
 # 速度模式：Policy输出[-1,1] × scale = 目标速度
-_UAV_MAX_VEL_HOR = 3.0      # 水平最大速度 (m/s)
-_UAV_MAX_VEL_Z = 2.0        # 垂直最大速度 (m/s) - 通常比水平慢
+_UAV_MAX_VEL_HOR = 1.0      # 水平最大速度 (m/s)
+_UAV_MAX_VEL_UP = 2.0       # 上升最大速度 (m/s)
+_UAV_MAX_VEL_DOWN = 1.0     # 下降最大速度 (m/s)
 _UAV_CONTROL_DT = 0.1       # 控制周期
 
 # 向量加速度限制 (基于PX4标准: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
@@ -278,12 +279,13 @@ class ActionsCfg:
     uav_action = mdp.UAVBodyActionWithYawRateCfg(
         asset_name="robot", 
         body_name=["body"],
-        scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 3 m/s
-        scale_z=_UAV_MAX_VEL_Z,        # 垂直速度缩放：action=1 → 2 m/s
+        scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 1 m/s
+        scale_z=_UAV_MAX_VEL_UP,       # 垂直速度缩放：action=1 → 2 m/s
         scale_yaw=1.57,                # 航向角缩放：action=1 → π/2 rad (90°)
         max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
-        max_vel_z=_UAV_MAX_VEL_Z,      # 垂直最大速度限制
-        max_yaw_rate=0.8,              # 最大航向角速度 (rad/s) ≈ 46°/s
+        max_vel_up=_UAV_MAX_VEL_UP,    # 上升最大速度限制
+        max_vel_down=_UAV_MAX_VEL_DOWN,  # 下降最大速度限制
+        max_yaw_rate=0.5,              # 最大航向角速度 (rad/s) ≈ 29°/s
         yaw_p_gain=2.0,                # 航向 P 控制器增益
         acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
         acc_up=_UAV_ACC_UP,            # 向上加速度限制
