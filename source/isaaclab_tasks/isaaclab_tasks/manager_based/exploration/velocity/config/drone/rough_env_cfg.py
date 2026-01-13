@@ -76,8 +76,12 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         # observations - 使用UAV观察配置
         self.observations.policy = self.observations.policy_uav
 
-        # terminations
+        # rewards - UAV 使用 3D 距离
+        self.rewards.reach_target_reward.params["use_3d"] = True
+        
+        # terminations - UAV 使用 3D 距离
         self.terminations.roll_over.params["threshold"] = 0.99
+        self.terminations.reach_target.params["use_3d"] = True
 
 
 

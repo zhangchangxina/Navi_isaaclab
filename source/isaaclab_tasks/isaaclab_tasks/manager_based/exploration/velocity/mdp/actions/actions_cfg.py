@@ -160,30 +160,35 @@ class UAVBodyActionCfg(BodyActionCfg):
 
 @configclass
 class UAVBodyActionWithYawRateCfg(BodyActionCfg):
-    """UAV速度模式动作配置 + 策略可控 yaw_rate（质点模型）。
+    """UAV速度模式动作配置 + 策略可控 yaw（质点模型）。
     
     相比 UAVBodyActionCfg：
-    - 策略直接输出 yaw_rate（而非自动跟随速度方向）
-    - 4维动作空间，与 UAVVelocityWithDynamicsActionCfg 一致
+    - 策略直接输出目标 yaw 角度（而非 yaw_rate 或自动跟随）
+    - 4维动作空间
     - 质点模型，无动力学，训练更快
     
-    动作空间: [vx, vy, vz, yaw_rate] (4维)
+    动作空间: [vx, vy, vz, yaw] (4维)
+    - vx, vy, vz: 机体系目标速度 (m/s)
+    - yaw: 目标航向角，相对于当前朝向的偏移量 (rad)
     
-    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + yaw_rate
+    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + yaw
     """
 
     use_default_offset: bool = True
-    action_dim = 4  # [vx, vy, vz, yaw_rate]
+    action_dim = 4  # [vx, vy, vz, yaw]
     
     # 动作缩放
     scale_hor: float = 3.0     # 水平速度缩放 (m/s): action=1 → 3 m/s
     scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
-    scale_yaw: float = 1.5     # 航向角速度缩放 (rad/s): action=1 → 1.5 rad/s
+    scale_yaw: float = 3.14    # 航向角缩放 (rad): action=1 → π rad (180°)
     
     # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX)
     max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
     max_vel_z: float = 2.0     # 垂直最大速度 (m/s)
-    max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s)
+    max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s) - 用于限制 P 控制器输出
+    
+    # 航向 P 控制器增益
+    yaw_p_gain: float = 2.0    # P 控制器增益: yaw_rate = Kp * yaw_error
     
     # 加速度限制 (PX4: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
     acc_hor: float = 3.0    # 水平最大加速度 (m/s²) - 向量限制

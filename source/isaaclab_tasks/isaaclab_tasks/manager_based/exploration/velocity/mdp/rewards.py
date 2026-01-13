@@ -201,10 +201,19 @@ def lidar_depth_min(env: ManagerBasedRLEnv, threshold: float, sensor_cfg = Scene
 
 
 
-def reach_target_reward(env: ManagerBasedRLEnv, threshold: float, command_name: str) -> torch.Tensor:
-    """Reward function for reaching target - gives large reward when within threshold."""
+def reach_target_reward(
+    env: ManagerBasedRLEnv, threshold: float, command_name: str, use_3d: bool = False
+) -> torch.Tensor:
+    """Reward function for reaching target - gives large reward when within threshold.
+    
+    Args:
+        env: The environment object.
+        threshold: Position distance threshold in meters.
+        command_name: Name of the command to track.
+        use_3d: If True, use 3D distance (for UAV). If False, use 2D XY distance (for UGV).
+    """
     from .terminations import reach_target
-    is_reached = reach_target(env, threshold, command_name)
+    is_reached = reach_target(env, threshold, command_name, use_3d=use_3d)
     return torch.where(is_reached, 1.0, 0.0)
 
 

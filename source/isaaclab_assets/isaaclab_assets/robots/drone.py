@@ -3,28 +3,11 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Configuration for Unitree robots.
-
-The following configurations are available:
-
-* :obj:`UNITREE_A1_CFG`: Unitree A1 robot with DC motor model for the legs
-* :obj:`UNITREE_GO1_CFG`: Unitree Go1 robot with actuator net model for the legs
-* :obj:`UNITREE_GO2_CFG`: Unitree Go2 robot with DC motor model for the legs
-* :obj:`H1_CFG`: H1 humanoid robot
-* :obj:`H1_MINIMAL_CFG`: H1 humanoid robot with minimal collision bodies
-* :obj:`G1_CFG`: G1 humanoid robot
-* :obj:`G1_MINIMAL_CFG`: G1 humanoid robot with minimal collision bodies
-
-Reference: https://github.com/unitreerobotics/unitree_ros
-"""
+"""Configuration for SU17 drone robot."""
 
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import ActuatorNetMLPCfg, DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
-from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR, LOCAL_ASSET_DIR, ISAAC_NUCLEUS_DIR
-
-
-
+from isaaclab.utils.assets import LOCAL_ASSET_DIR
 
 
 DRONE_CFG = ArticulationCfg(
@@ -51,5 +34,3 @@ DRONE_CFG = ArticulationCfg(
     ),
     actuators={},  # 无人机没有关节，不需要actuator
 )
-
-

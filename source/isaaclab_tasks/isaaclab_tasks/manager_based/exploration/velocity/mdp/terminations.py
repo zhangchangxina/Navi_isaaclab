@@ -101,7 +101,8 @@ def roll_over(
 
 def reach_target(
     env: ManagerBasedRLEnv, threshold: float, command_name: str,
-    velocity_threshold: float = None  # 速度阈值 m/s, None表示不检查速度
+    velocity_threshold: float = None,  # 速度阈值 m/s, None表示不检查速度
+    use_3d: bool = False  # 是否使用3D距离（UAV用True，UGV用False）
 ) -> torch.Tensor:
     """Terminate when the robot reaches the target within threshold distance.
     
@@ -111,10 +112,17 @@ def reach_target(
         command_name: Name of the command to track.
         velocity_threshold: Optional velocity threshold. If provided, robot must also 
                           have velocity below this value to terminate.
+        use_3d: If True, use 3D distance (for UAV). If False, use 2D XY distance (for UGV).
     """
     command = env.command_manager.get_command(command_name)
-    # Use 2D XY distance
-    des_pos_b = command[:, :2]
+    
+    if use_3d:
+        # Use 3D distance for UAV
+        des_pos_b = command[:, :3]
+    else:
+        # Use 2D XY distance for UGV
+        des_pos_b = command[:, :2]
+    
     distance = torch.norm(des_pos_b, dim=1)
     position_reached = distance <= threshold
     

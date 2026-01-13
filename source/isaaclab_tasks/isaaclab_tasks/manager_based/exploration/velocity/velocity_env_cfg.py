@@ -267,19 +267,24 @@ class ActionsCfg:
     #     # 使用默认值即可，已在 UAVVelocityWithDynamicsActionCfg 中设置
     # )
     
-    # 方案 3: 质点模型 + 策略可控 yaw_rate (无动力学, 4维动作, 训练快!)
-    # 动作空间: [vx, vy, vz, yaw_rate] (4维)
-    # 相比方案1：策略可直接控制航向（而非自动跟随）
+    # 方案 3: 质点模型 + 策略可控 yaw_offset (无动力学, 4维动作, 训练快!)
+    # 动作空间: [vx, vy, vz, yaw_offset] (4维)
+    # - vx, vy, vz: 机体系目标速度
+    # - yaw_offset: 航向偏移量（相对于目标点方向）
+    #   - yaw_offset=0 → 朝向目标点
+    #   - yaw_offset>0 → 向右偏看
+    # 相比方案1：策略可直接控制航向偏移
     # 相比方案2：质点模型无动力学延迟，训练更快
     uav_action = mdp.UAVBodyActionWithYawRateCfg(
         asset_name="robot", 
         body_name=["body"],
         scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 3 m/s
         scale_z=_UAV_MAX_VEL_Z,        # 垂直速度缩放：action=1 → 2 m/s
-        scale_yaw=1.5,                 # 航向角速度缩放：action=1 → 1.5 rad/s
+        scale_yaw=1.57,                # 航向角缩放：action=1 → π/2 rad (90°)
         max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
         max_vel_z=_UAV_MAX_VEL_Z,      # 垂直最大速度限制
-        max_yaw_rate=1.5,              # 最大航向角速度 (rad/s)
+        max_yaw_rate=0.8,              # 最大航向角速度 (rad/s) ≈ 46°/s
+        yaw_p_gain=2.0,                # 航向 P 控制器增益
         acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
         acc_up=_UAV_ACC_UP,            # 向上加速度限制
         acc_down=_UAV_ACC_DOWN,        # 向下加速度限制
@@ -311,8 +316,8 @@ class ObservationsCfg:
     @configclass
     class PolicyCfgUAV(ObsGroup):
         """Observations for UAV policy group (3D navigation)."""
-        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel)          # 线速度 (3维)
-        # base_ang_vel = ObsTerm(func=mdp.base_ang_vel)          # 角速度 (3维)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)          # 线速度 (3维)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)          # 角速度 (3维)
         projected_gravity = ObsTerm(func=mdp.projected_gravity) # 姿态 (3维)
         base_height = ObsTerm(func=mdp.base_height)            # 高度 (1维)
         pose_command = ObsTerm(func=mdp.pose_command_position_only, params={"command_name": "pose_command"})
@@ -448,7 +453,7 @@ class RewardsCfg:
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1)
     
     # 动作幅度惩罚 - 限制动作大小，鼓励高效控制
-    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.2)  
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.1)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(
@@ -461,7 +466,7 @@ class RewardsCfg:
     # 朝向奖励 - 鼓励机器人朝向目标
     orientation_tracking = RewTerm(
         func=mdp.heading_command_error_abs,
-        weight=-0.3,  # 朝向误差惩罚
+        weight=-0.1,  # 朝向误差惩罚
         params={"command_name": "pose_command"},
     )
     
