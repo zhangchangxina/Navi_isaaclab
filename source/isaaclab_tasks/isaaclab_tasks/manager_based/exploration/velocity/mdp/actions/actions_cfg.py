@@ -182,9 +182,10 @@ class UAVBodyActionWithYawRateCfg(BodyActionCfg):
     scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
     scale_yaw: float = 3.14    # 航向角缩放 (rad): action=1 → π rad (180°)
     
-    # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX)
+    # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX_UP/DN)
     max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
-    max_vel_z: float = 2.0     # 垂直最大速度 (m/s)
+    max_vel_up: float = 2.0    # 上升最大速度 (m/s)
+    max_vel_down: float = 1.0  # 下降最大速度 (m/s)
     max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s) - 用于限制 P 控制器输出
     
     # 航向 P 控制器增益
