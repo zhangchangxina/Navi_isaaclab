@@ -182,7 +182,7 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(0.1, 0.1),
         max_length=1000,
-        threshold=3.0,  # 增大阈值，只有重置时（位置跳跃>10m）才清除轨迹
+        threshold=10.0,  # 增大阈值，只有重置时（位置跳跃>10m）才清除轨迹
     )
 
 
@@ -216,7 +216,7 @@ _UAV_MAX_VEL_DOWN = 1.0     # 下降最大速度 (m/s)
 _UAV_CONTROL_DT = 0.1       # 控制周期
 
 # 向量加速度限制 (基于PX4标准: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
-_UAV_ACC_HOR = 3.0          # 水平最大加速度 (m/s²) - 向量限制，任意方向一致
+_UAV_ACC_HOR = 2.0          # 水平最大加速度 (m/s²) - 向量限制，任意方向一致
 _UAV_ACC_UP = 3.0           # 向上最大加速度 (m/s²)
 _UAV_ACC_DOWN = 2.0         # 向下最大加速度 (m/s²) - 安全限制，防止下降过快
 
@@ -276,12 +276,41 @@ class ActionsCfg:
     #   - yaw_offset>0 → 向右偏看
     # 相比方案1：策略可直接控制航向偏移
     # 相比方案2：质点模型无动力学延迟，训练更快
-    uav_action = mdp.UAVBodyActionWithYawRateCfg(
+    # uav_action = mdp.UAVBodyActionWithYawCfg(
+    #     asset_name="robot", 
+    #     body_name=["body"],
+    #     scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 1 m/s
+    #     scale_z=_UAV_MAX_VEL_UP,       # 垂直速度缩放：action=1 → 2 m/s
+    #     scale_yaw=1.57,                # 航向角缩放：action=1 → π/2 rad (90°)
+    #     max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
+    #     max_vel_up=_UAV_MAX_VEL_UP,    # 上升最大速度限制
+    #     max_vel_down=_UAV_MAX_VEL_DOWN,  # 下降最大速度限制
+    #     max_yaw_rate=0.5,              # 最大航向角速度 (rad/s) ≈ 29°/s
+    #     yaw_p_gain=2.0,                # 航向 P 控制器增益
+    #     acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
+    #     acc_up=_UAV_ACC_UP,            # 向上加速度限制
+    #     acc_down=_UAV_ACC_DOWN,        # 向下加速度限制
+    # )
+
+
+# 方案四
+# - 3维动作空间：[vx, vy, vz]
+# - 航向自动朝向目标点，策略不控制 yaw
+# - 更容易学习，适合初期训练
+
+# 动作空间: [vx, vy, vz] (3维)
+# - vx, vy, vz: 机体坐标系目标速度 (m/s)
+
+# 航向控制：
+# target_yaw = direction_to_goal  # 始终朝向目标
+# 使用 P 控制器将 target_yaw 转换为 yaw_rate
+
+# 部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + auto yaw
+    uav_action = mdp.UAVBodyActionAutoYawCfg(
         asset_name="robot", 
         body_name=["body"],
         scale_hor=_UAV_MAX_VEL_HOR,    # 水平速度缩放：action=1 → 1 m/s
         scale_z=_UAV_MAX_VEL_UP,       # 垂直速度缩放：action=1 → 2 m/s
-        scale_yaw=1.57,                # 航向角缩放：action=1 → π/2 rad (90°)
         max_vel_hor=_UAV_MAX_VEL_HOR,  # 水平最大速度限制
         max_vel_up=_UAV_MAX_VEL_UP,    # 上升最大速度限制
         max_vel_down=_UAV_MAX_VEL_DOWN,  # 下降最大速度限制
@@ -455,7 +484,7 @@ class RewardsCfg:
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1)
     
     # 动作幅度惩罚 - 限制动作大小，鼓励高效控制
-    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.1)  
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.5)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(
@@ -466,11 +495,11 @@ class RewardsCfg:
     
 
     # 朝向奖励 - 鼓励机器人朝向目标
-    orientation_tracking = RewTerm(
-        func=mdp.heading_command_error_abs,
-        weight=-0.1,  # 朝向误差惩罚
-        params={"command_name": "pose_command"},
-    )
+    # orientation_tracking = RewTerm(
+    #     func=mdp.heading_command_error_abs,
+    #     weight=-0.1,  # 朝向误差惩罚
+    #     params={"command_name": "pose_command"},
+    # )
     
     #
 

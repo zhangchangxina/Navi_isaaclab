@@ -386,7 +386,7 @@ class UAVBodyAction(BodyAction):
         self._asset.write_root_link_velocity_to_sim(root_velocities)
 
 
-class UAVBodyActionWithYawRate(BodyAction):
+class UAVBodyActionWithYaw(BodyAction):
     """UAV速度模式动作 + 策略可控 yaw_offset（质点模型 + 模拟姿态倾斜）。
     
     相比 UAVBodyAction：
@@ -414,10 +414,10 @@ class UAVBodyActionWithYawRate(BodyAction):
     部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + yaw
     """
 
-    cfg: actions_cfg.UAVBodyActionWithYawRateCfg
+    cfg: actions_cfg.UAVBodyActionWithYawCfg
     """The configuration of the action term."""
 
-    def __init__(self, cfg: actions_cfg.UAVBodyActionWithYawRateCfg, env: ManagerBasedEnv):
+    def __init__(self, cfg: actions_cfg.UAVBodyActionWithYawCfg, env: ManagerBasedEnv):
         super().__init__(cfg, env)
         if cfg.use_default_offset:
             self._offset = self._asset.data.default_root_state[:, self._body_idx].clone()
@@ -442,6 +442,8 @@ class UAVBodyActionWithYawRate(BodyAction):
         - yaw_offset>0 → 向右偏
         """
         self._raw_actions[:] = actions
+        # 裁剪动作到 [-1, 1] 范围（防止模型输出异常值）
+        actions = torch.clamp(actions, -1.0, 1.0)
         # 水平方向 (x, y) 使用 scale_hor
         self._processed_actions[:, 0] = actions[:, 0] * self.cfg.scale_hor
         self._processed_actions[:, 1] = actions[:, 1] * self.cfg.scale_hor
@@ -491,6 +493,17 @@ class UAVBodyActionWithYawRate(BodyAction):
         max_vel_down = self.cfg.max_vel_down
         max_yaw_rate = self.cfg.max_yaw_rate
         
+        # # DEBUG: 每100步打印一次速度信息
+        # if hasattr(self, '_debug_counter'):
+        #     self._debug_counter += 1
+        # else:
+        #     self._debug_counter = 0
+        # if self._debug_counter % 100 == 0:
+        #     print(f"[DEBUG] target_vel_hor={torch.norm(target_vel[:, :2], dim=1).mean().item():.2f}, "
+        #           f"current_vel_hor={torch.norm(current_vel[:, :2], dim=1).mean().item():.2f}, "
+        #           f"scale_hor={self.cfg.scale_hor}, max_vel_hor={max_vel_hor}"
+        #           f"action_raw={self._raw_actions}, faction_processed={self.processed_actions}")
+        
         new_vel = torch.zeros_like(current_vel)
         
         # ========== Step 1: 水平方向加速度限制 (向量限制) ==========
@@ -503,6 +516,10 @@ class UAVBodyActionWithYawRate(BodyAction):
         vel_hor_magnitude = torch.norm(new_vel[:, :2], dim=1, keepdim=True)
         vel_scale = torch.clamp(max_vel_hor / (vel_hor_magnitude + 1e-6), max=1.0)
         new_vel[:, :2] = new_vel[:, :2] * vel_scale
+        
+        # DEBUG: 检查速度是否超限
+        if torch.any(torch.norm(new_vel[:, :2], dim=1) > max_vel_hor + 0.01):
+            print(f"[WARN] Horizontal velocity exceeded! max={torch.norm(new_vel[:, :2], dim=1).max().item():.2f}, limit={max_vel_hor}")
         
         # ========== Step 3: 垂直方向加速度限制 (非对称) ==========
         new_vel[:, 2] = torch.clamp(
@@ -614,6 +631,211 @@ class UAVBodyActionWithYawRate(BodyAction):
             self._target_yaw[env_ids] = 0.0
 
 
+class UAVBodyActionAutoYaw(BodyAction):
+    """UAV速度模式动作 + 航向自动朝向目标（质点模型 + 模拟姿态倾斜）。
+    
+    方案四：最简单的控制模式
+    - ✅ 3维动作空间：[vx, vy, vz]
+    - ✅ 航向自动朝向目标点，策略不控制 yaw
+    - ✅ 质点模型，训练更快
+    - ✅ 模拟姿态倾斜：根据加速度计算 roll/pitch，让雷达有真实的姿态变化
+    
+    动作空间: [vx, vy, vz] (3维)
+    - vx, vy, vz: 机体坐标系目标速度 (m/s)
+    
+    航向控制原理：
+    target_yaw = direction_to_goal  # 始终朝向目标
+    使用 P 控制器将 target_yaw 转换为 yaw_rate
+    
+    姿态模拟原理：
+    - 前进加速 (ax > 0) → pitch 前倾 (机头低) → 雷达向下看
+    - 左移加速 (ay > 0) → roll 右倾 → 雷达右倾
+    - 公式: pitch ≈ atan(ax/g), roll ≈ atan(-ay/g)
+    
+    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + auto yaw
+    """
+
+    cfg: actions_cfg.UAVBodyActionAutoYawCfg
+    """The configuration of the action term."""
+
+    def __init__(self, cfg: actions_cfg.UAVBodyActionAutoYawCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+        if cfg.use_default_offset:
+            self._offset = self._asset.data.default_root_state[:, self._body_idx].clone()
+        
+        # 保存上一步速度，用于计算加速度
+        self._prev_vel_world = torch.zeros(self.num_envs, 3, device=self.device)
+        # 当前模拟的 roll/pitch（用于平滑过渡）
+        self._simulated_roll = torch.zeros(self.num_envs, device=self.device)
+        self._simulated_pitch = torch.zeros(self.num_envs, device=self.device)
+        # 重力加速度
+        self._gravity = 9.81
+        # 姿态平滑系数 (0~1, 越小越平滑)
+        self._attitude_smoothing = 0.3
+
+    def process_actions(self, actions: torch.Tensor):
+        """处理策略输出: [vx, vy, vz]
+        
+        3维动作空间，无 yaw 控制
+        """
+        self._raw_actions[:] = actions
+        # 裁剪动作到 [-1, 1] 范围（防止模型输出异常值）
+        actions = torch.clamp(actions, -1.0, 1.0)
+        # 水平方向 (x, y) 使用 scale_hor
+        self._processed_actions[:, 0] = actions[:, 0] * self.cfg.scale_hor
+        self._processed_actions[:, 1] = actions[:, 1] * self.cfg.scale_hor
+        # 垂直方向 (z) 使用 scale_z
+        self._processed_actions[:, 2] = actions[:, 2] * self.cfg.scale_z
+
+    def apply_actions(self):
+        """Apply velocity commands with auto yaw towards target.
+        
+        质点模型 + 模拟姿态倾斜：
+        1. 计算目标速度和加速度
+        2. 根据加速度计算模拟的 roll/pitch
+        3. 自动计算目标 yaw（朝向目标点）
+        4. 写入速度和姿态到仿真
+        """
+        # 获取当前状态
+        current_vel = self._asset.data.root_lin_vel_b.clone()  # (num_envs, 3) 机体系
+        current_ang_vel = self._asset.data.root_ang_vel_b[:, 2]  # z轴角速度
+        quat = self._asset.data.root_link_quat_w
+        current_pos = self._asset.data.root_link_pos_w.clone()
+        
+        # 获取当前 yaw
+        current_euler = math_utils.euler_xyz_from_quat(quat)
+        current_yaw = current_euler[2]  # (num_envs,)
+
+        # 目标速度向量 (机体系)
+        target_vel = self.processed_actions[:, 0:3]  # (num_envs, 3)
+        
+        # 获取目标点方向 (从 pose_command 获取，机体系下的目标位置)
+        pose_command = self._env.command_manager.get_command("pose_command")
+        goal_x_body = pose_command[:, 0]  # 机体系下目标点 x
+        goal_y_body = pose_command[:, 1]  # 机体系下目标点 y
+        # 目标点方向 (相对于当前机头方向的角度)
+        direction_to_goal_body = torch.atan2(goal_y_body, goal_x_body)
+        
+        # 获取物理限制参数
+        acc_hor = self.cfg.acc_hor_per_step
+        acc_up = self.cfg.acc_up_per_step
+        acc_down = self.cfg.acc_down_per_step
+        max_vel_hor = self.cfg.max_vel_hor
+        max_vel_up = self.cfg.max_vel_up
+        max_vel_down = self.cfg.max_vel_down
+        max_yaw_rate = self.cfg.max_yaw_rate
+        
+        new_vel = torch.zeros_like(current_vel)
+        
+        # ========== Step 1: 水平方向加速度限制 (向量限制) ==========
+        delta_vel_hor = target_vel[:, :2] - current_vel[:, :2]
+        delta_magnitude = torch.norm(delta_vel_hor, dim=1, keepdim=True)
+        acc_scale = torch.clamp(acc_hor / (delta_magnitude + 1e-6), max=1.0)
+        new_vel[:, :2] = current_vel[:, :2] + delta_vel_hor * acc_scale
+        
+        # ========== Step 2: 水平速度上限 (向量限制) ==========
+        vel_hor_magnitude = torch.norm(new_vel[:, :2], dim=1, keepdim=True)
+        vel_scale = torch.clamp(max_vel_hor / (vel_hor_magnitude + 1e-6), max=1.0)
+        new_vel[:, :2] = new_vel[:, :2] * vel_scale
+        
+        # ========== Step 3: 垂直方向加速度限制 (非对称) ==========
+        new_vel[:, 2] = torch.clamp(
+            target_vel[:, 2],
+            min=current_vel[:, 2] - acc_down,
+            max=current_vel[:, 2] + acc_up
+        )
+        
+        # ========== Step 4: 垂直速度上限 (非对称) ==========
+        new_vel[:, 2] = torch.clamp(new_vel[:, 2], min=-max_vel_down, max=max_vel_up)
+        
+        # ========== Step 5: 航向控制 (自动朝向目标) ==========
+        # target_yaw = direction_to_goal（世界系）
+        # direction_to_goal_body 是机体系下目标点的方向角
+        # 转换到世界系: target_yaw = current_yaw + direction_to_goal_body
+        target_yaw = current_yaw + direction_to_goal_body
+        # Wrap to [-π, π]
+        target_yaw = torch.atan2(torch.sin(target_yaw), torch.cos(target_yaw))
+        
+        # 计算 yaw 误差 (wrap to [-π, π])
+        yaw_error = target_yaw - current_yaw
+        yaw_error = torch.atan2(torch.sin(yaw_error), torch.cos(yaw_error))
+        
+        # P 控制器: yaw_rate = Kp * yaw_error
+        yaw_p_gain = self.cfg.yaw_p_gain
+        target_yaw_rate = yaw_p_gain * yaw_error
+        
+        # 限制最大 yaw_rate
+        target_yaw_rate = torch.clamp(target_yaw_rate, -max_yaw_rate, max_yaw_rate)
+        
+        # 角速度加速度限制 (平滑)
+        yaw_acc = self.cfg.yaw_acc_per_step
+        new_yaw_rate = torch.clamp(
+            target_yaw_rate,
+            min=current_ang_vel - yaw_acc,
+            max=current_ang_vel + yaw_acc
+        )
+        
+        # ========== Step 6: 计算模拟姿态 (根据加速度) ==========
+        # 将机体系速度转换到世界系
+        new_vel_world = math_utils.quat_apply(quat, new_vel)
+        
+        # 计算世界系加速度 (速度变化 / dt)
+        acc_world = (new_vel_world - self._prev_vel_world) / 0.1  # dt ≈ 0.1s
+        self._prev_vel_world = new_vel_world.clone()
+        
+        # 将世界系加速度转换到航向系
+        yaw_quat = math_utils.quat_from_euler_xyz(
+            torch.zeros_like(current_yaw), 
+            torch.zeros_like(current_yaw), 
+            current_yaw
+        )
+        acc_heading = math_utils.quat_apply_inverse(yaw_quat, acc_world)
+        
+        # 根据加速度计算目标姿态角
+        target_pitch = torch.atan(acc_heading[:, 0] / self._gravity)  # ax/g
+        target_roll = torch.atan(-acc_heading[:, 1] / self._gravity)  # -ay/g
+        
+        # 限制最大姿态角 (约 30°)
+        max_tilt = 0.52  # ~30 degrees
+        target_pitch = torch.clamp(target_pitch, -max_tilt, max_tilt)
+        target_roll = torch.clamp(target_roll, -max_tilt, max_tilt)
+        
+        # 平滑过渡
+        self._simulated_pitch = (1 - self._attitude_smoothing) * self._simulated_pitch + self._attitude_smoothing * target_pitch
+        self._simulated_roll = (1 - self._attitude_smoothing) * self._simulated_roll + self._attitude_smoothing * target_roll
+        
+        # 更新 yaw
+        new_yaw = current_yaw + new_yaw_rate * 0.1  # dt ≈ 0.1s
+        
+        # ========== Step 7: 构建新的姿态四元数 ==========
+        new_quat = math_utils.quat_from_euler_xyz(
+            self._simulated_roll,
+            self._simulated_pitch, 
+            new_yaw
+        )
+        
+        # ========== Step 8: 写入位置、姿态和速度 ==========
+        new_pos = current_pos + new_vel_world * 0.1  # dt ≈ 0.1s
+        
+        root_state = torch.zeros(self.num_envs, 13, device=self.device)
+        root_state[:, 0:3] = new_pos
+        root_state[:, 3:7] = new_quat
+        root_state[:, 7:10] = new_vel_world  # 世界系线速度
+        root_state[:, 10] = 0.0  # ang_vel_x
+        root_state[:, 11] = 0.0  # ang_vel_y
+        root_state[:, 12] = new_yaw_rate  # ang_vel_z
+        
+        # 写入仿真
+        self._asset.write_root_link_pose_to_sim(root_state[:, 0:7])
+        self._asset.write_root_link_velocity_to_sim(root_state[:, 7:13])
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        """重置状态"""
+        super().reset(env_ids)
+        if env_ids is not None:
+            self._prev_vel_world[env_ids] = 0.0
+            self._simulated_roll[env_ids] = 0.0
+            self._simulated_pitch[env_ids] = 0.0
 
 
 class ExternalForceTorqueAction(BodyAction):

@@ -66,12 +66,9 @@ class DroneRoughEnvCfg(ExplorationVelocityRoughEnvCfg):
         
         # Drone 参数配置 (UAVVelocityWithDynamicsActionCfg)
         self.actions.uav_action.body_name = ["body"]  # 与 SU17.usd 模型一致
-        self.actions.uav_action.scale_hor = 3.0       # 水平速度缩放：action=1 → 3 m/s
-        self.actions.uav_action.scale_z = 2.0         # 垂直速度缩放：action=1 → 2 m/s
-        self.actions.uav_action.max_vel_hor = 3.0     # 水平最大速度限制
-        self.actions.uav_action.max_vel_z = 2.0       # 垂直最大速度限制
-        self.actions.uav_action.max_acc_hor = 3.0     # 水平最大加速度 (m/s²)
-        self.actions.uav_action.max_acc_z = 3.0       # 垂直最大加速度 (m/s²)
+        # 以下参数已在 velocity_env_cfg.py 和 actions_cfg.py 中统一设置，无需重复覆盖
+        # scale_hor=1.0, scale_z=2.0, max_vel_hor=1.0, max_vel_up=2.0, max_vel_down=1.0
+        # acc_hor=2.0, max_yaw_rate=0.5
         
         # observations - 使用UAV观察配置
         self.observations.policy = self.observations.policy_uav

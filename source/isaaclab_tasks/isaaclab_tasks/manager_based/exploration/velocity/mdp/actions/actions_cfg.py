@@ -103,22 +103,22 @@ class UAVBodyActionCfg(BodyActionCfg):
     action_dim = 3
     
     # 动作缩放（分开设置水平和垂直）
-    scale_hor: float = 3.0   # 水平速度缩放 (m/s) - action=1 → 3 m/s
+    scale_hor: float = 1.0   # 水平速度缩放 (m/s) - action=1 → 1 m/s
     scale_z: float = 2.0     # 垂直速度缩放 (m/s) - action=1 → 2 m/s
     
     # 速度限制配置 (基于PX4飞控标准: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX)
-    max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
+    max_vel_hor: float = 1.0   # 水平最大速度 (m/s)
     max_vel_z: float = 2.0     # 垂直最大速度 (m/s)
     
     # 加速度限制配置 (基于PX4飞控标准: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
-    acc_hor: float = 3.0    # 水平最大加速度 (m/s²) - 向量限制
+    acc_hor: float = 2.0    # 水平最大加速度 (m/s²) - 向量限制
     acc_up: float = 3.0     # 向上最大加速度 (m/s²)
     acc_down: float = 2.0   # 向下最大加速度 (m/s²) - 安全限制
     
     # ========== 航向跟随配置 ==========
     # 无人机自动朝向世界系水平速度方向
     yaw_rate_gain: float = 2.0    # 航向P控制器增益
-    max_yaw_rate: float = 1.5     # 最大角速度 (rad/s) ≈ 86°/s
+    max_yaw_rate: float = 0.5     # 最大角速度 (rad/s) ≈ 29°/s
     yaw_acc: float = 3.0          # 角加速度限制 (rad/s²)
     
     # 时间步长配置
@@ -159,7 +159,7 @@ class UAVBodyActionCfg(BodyActionCfg):
 
 
 @configclass
-class UAVBodyActionWithYawRateCfg(BodyActionCfg):
+class UAVBodyActionWithYawCfg(BodyActionCfg):
     """UAV速度模式动作配置 + 策略可控 yaw（质点模型）。
     
     相比 UAVBodyActionCfg：
@@ -175,24 +175,24 @@ class UAVBodyActionWithYawRateCfg(BodyActionCfg):
     """
 
     use_default_offset: bool = True
-    action_dim = 4  # [vx, vy, vz, yaw]
+    action_dim = 4  # [vx, vy, vz, yaw_offset]
     
-    # 动作缩放
-    scale_hor: float = 3.0     # 水平速度缩放 (m/s): action=1 → 3 m/s
+    # 动作缩放 (与 velocity_env_cfg.py 保持一致)
+    scale_hor: float = 1.0     # 水平速度缩放 (m/s): action=1 → 1 m/s
     scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
-    scale_yaw: float = 3.14    # 航向角缩放 (rad): action=1 → π rad (180°)
+    scale_yaw: float = 1.57    # 航向角缩放 (rad): action=1 → π/2 rad (90°)
     
     # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX_UP/DN)
-    max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
+    max_vel_hor: float = 1.0   # 水平最大速度 (m/s)
     max_vel_up: float = 2.0    # 上升最大速度 (m/s)
     max_vel_down: float = 1.0  # 下降最大速度 (m/s)
-    max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s) - 用于限制 P 控制器输出
+    max_yaw_rate: float = 0.5  # 最大航向角速度 (rad/s) ≈ 29°/s
     
     # 航向 P 控制器增益
     yaw_p_gain: float = 2.0    # P 控制器增益: yaw_rate = Kp * yaw_error
     
     # 加速度限制 (PX4: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
-    acc_hor: float = 3.0    # 水平最大加速度 (m/s²) - 向量限制
+    acc_hor: float = 2.0    # 水平最大加速度 (m/s²) - 向量限制
     acc_up: float = 3.0     # 向上最大加速度 (m/s²)
     acc_down: float = 2.0   # 向下最大加速度 (m/s²)
     yaw_acc: float = 3.0    # 角加速度限制 (rad/s²)
@@ -221,7 +221,75 @@ class UAVBodyActionWithYawRateCfg(BodyActionCfg):
     def yaw_acc_per_step(self) -> float:
         return self.yaw_acc * self.control_dt
 
-    class_type: type[ActionTerm] = body_actions.UAVBodyActionWithYawRate
+    class_type: type[ActionTerm] = body_actions.UAVBodyActionWithYaw
+
+
+@configclass
+class UAVBodyActionAutoYawCfg(BodyActionCfg):
+    """UAV速度模式动作配置 + 航向自动朝向目标（质点模型）。
+    
+    方案四：最简单的控制模式
+    - 3维动作空间：[vx, vy, vz]
+    - 航向自动朝向目标点，策略不控制 yaw
+    - 更容易学习，适合初期训练
+    
+    动作空间: [vx, vy, vz] (3维)
+    - vx, vy, vz: 机体坐标系目标速度 (m/s)
+    
+    航向控制：
+    target_yaw = direction_to_goal  # 始终朝向目标
+    使用 P 控制器将 target_yaw 转换为 yaw_rate
+    
+    部署时使用 Prometheus Move_mode=4 (XYZ_VEL_BODY) + auto yaw
+    """
+
+    use_default_offset: bool = True
+    action_dim = 3  # [vx, vy, vz] - 无 yaw 动作
+    
+    # 动作缩放 (与其他 UAV 配置保持一致)
+    scale_hor: float = 1.0     # 水平速度缩放 (m/s): action=1 → 1 m/s
+    scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
+    
+    # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX_UP/DN)
+    max_vel_hor: float = 1.0   # 水平最大速度 (m/s)
+    max_vel_up: float = 2.0    # 上升最大速度 (m/s)
+    max_vel_down: float = 1.0  # 下降最大速度 (m/s)
+    max_yaw_rate: float = 0.5  # 最大航向角速度 (rad/s) ≈ 29°/s
+    
+    # 航向 P 控制器增益
+    yaw_p_gain: float = 2.0    # P 控制器增益: yaw_rate = Kp * yaw_error
+    
+    # 加速度限制 (PX4: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
+    acc_hor: float = 2.0    # 水平最大加速度 (m/s²) - 向量限制
+    acc_up: float = 3.0     # 向上最大加速度 (m/s²)
+    acc_down: float = 2.0   # 向下最大加速度 (m/s²)
+    yaw_acc: float = 3.0    # 角加速度限制 (rad/s²)
+    
+    # 时间步长配置
+    sim_dt: float = 0.01
+    decimation: int = 10
+    
+    @property
+    def control_dt(self) -> float:
+        return self.sim_dt * self.decimation
+    
+    @property
+    def acc_hor_per_step(self) -> float:
+        return self.acc_hor * self.control_dt
+    
+    @property
+    def acc_up_per_step(self) -> float:
+        return self.acc_up * self.control_dt
+    
+    @property
+    def acc_down_per_step(self) -> float:
+        return self.acc_down * self.control_dt
+    
+    @property
+    def yaw_acc_per_step(self) -> float:
+        return self.yaw_acc * self.control_dt
+
+    class_type: type[ActionTerm] = body_actions.UAVBodyActionAutoYaw
 
 
 @configclass
@@ -264,19 +332,19 @@ class UAVVelocityWithDynamicsActionCfg(BodyActionCfg):
     action_dim = 4  # [vx, vy, vz, yaw_rate]
     
     # 动作缩放
-    scale_hor: float = 3.0     # 水平速度缩放 (m/s): action=1 → 3 m/s
+    scale_hor: float = 1.0     # 水平速度缩放 (m/s): action=1 → 1 m/s
     scale_z: float = 2.0       # 垂直速度缩放 (m/s): action=1 → 2 m/s
-    scale_yaw: float = 1.5     # 航向角速度缩放 (rad/s): action=1 → 1.5 rad/s ≈ 86°/s
+    scale_yaw: float = 1.57    # 航向角速度缩放 (rad/s): action=1 → π/2 rad/s
     
     # 速度限制 (PX4: MPC_XY_VEL_MAX, MPC_Z_VEL_MAX_UP/DN)
-    max_vel_hor: float = 3.0   # 水平最大速度 (m/s)
+    max_vel_hor: float = 1.0   # 水平最大速度 (m/s)
     max_vel_up: float = 2.0    # 上升最大速度 (m/s)
     max_vel_down: float = 1.0  # 下降最大速度 (m/s)
-    max_yaw_rate: float = 1.5  # 最大航向角速度 (rad/s)
+    max_yaw_rate: float = 0.5  # 最大航向角速度 (rad/s) ≈ 29°/s
     
     # 加速度限制 (PX4: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
-    max_acc_hor: float = 3.0   # 水平最大加速度 (m/s²), PX4 默认 5.0
-    max_acc_z: float = 3.0     # 垂直最大加速度 (m/s²), PX4 默认 4.0
+    max_acc_hor: float = 2.0   # 水平最大加速度 (m/s²)
+    max_acc_z: float = 3.0     # 垂直最大加速度 (m/s²)
     
     # 时间步长
     sim_dt: float = 0.01
