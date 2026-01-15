@@ -2,4 +2,4 @@
 
 export CUDA_VISIBLE_DEVICES=2
 
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py --task=Isaac-Exploration-Rough-Drone-v0 --num_envs=16 --checkpoint=logs/rsl_rl/drone_rough/2026-01-14_00-08-42_drone_experiment_ppo/model_7000.pt
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py --task=Isaac-Exploration-Rough-Drone-v0 --num_envs=16 --checkpoint=logs/rsl_rl/drone_rough/2026-01-14_17-45-35_drone_experiment_ppo/model_3000.pt

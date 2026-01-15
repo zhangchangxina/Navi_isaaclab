@@ -66,7 +66,7 @@ class TrajectoryVisCommand(CommandTerm):
         self.trajectory_vels = None
 
         self.cmap = plt.get_cmap('jet')  # 'plasma', 'magma', 'cividis', 'jet'
-        self.vel_upper = 4.0
+        self.vel_upper = 1.0  # 与 _UAV_MAX_VEL_HOR 一致
 
         self.traj_thickness = 3.0
 

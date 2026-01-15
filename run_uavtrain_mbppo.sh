@@ -14,8 +14,8 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   --dyn_w_dyn=1.0 --dyn_w_r=1.0 --dyn_w_d=0.1 \
   --num_networks=1  --dynamics_lr=1e-3 --mb_buffer_size=1000000 --mb_batch_size=2048 --mb_update_every=24 --mb_update_steps=100  \
   --mb_virtual_envs=64 --mb_virt_steps_per_iter=0 --mb_init_from_buffer --mb_warmup_iters=10 \
-  # --use_cbf --cbf_gamma 0.5 \
-  # --use_bc --bc_coef 0.1 --bc_decay 0.999 --bc_min 0.01 --bc_loss_type mse
+  --use_cbf --cbf_gamma 0.5 \
+  --use_bc --bc_coef 0.1 --bc_decay 0.999 --bc_min 0.01 --bc_loss_type mse
 
 # 不用模型数据：把 mb_virtual_envs 设为 0
 # CBF 参数说明：

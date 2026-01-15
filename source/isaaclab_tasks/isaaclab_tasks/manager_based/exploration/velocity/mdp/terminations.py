@@ -80,10 +80,11 @@ def out_of_height_limit(
 
 
 def least_lidar_depth(env: ManagerBasedRLEnv, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Terminate when the contact force on the sensor exceeds the force threshold."""
+    """Terminate when the minimum lidar depth is below threshold (3D distance)."""
     # extract the used quantities (to enable type-hinting)
     sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
-    depth = torch.norm(sensor.data.ray_hits_w[..., 0:2] - sensor.data.pos_w[:, 0:2].unsqueeze(1), dim=-1)
+    # 3D distance: full ray length from sensor to hit point
+    depth = torch.norm(sensor.data.ray_hits_w - sensor.data.pos_w.unsqueeze(1), dim=-1)
     return torch.any(depth < threshold, dim=1)
 
 
@@ -136,4 +137,3 @@ def reach_target(
     
     # Return True if within threshold, False otherwise
     return position_reached
-

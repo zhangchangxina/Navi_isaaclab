@@ -257,7 +257,7 @@ class UAVBodyActionAutoYawCfg(BodyActionCfg):
     max_yaw_rate: float = 0.5  # 最大航向角速度 (rad/s) ≈ 29°/s
     
     # 航向 P 控制器增益
-    yaw_p_gain: float = 2.0    # P 控制器增益: yaw_rate = Kp * yaw_error
+    yaw_p_gain: float = 0.5    # P 控制器增益: yaw_rate = Kp * yaw_error
     
     # 加速度限制 (PX4: MPC_ACC_HOR_MAX, MPC_ACC_UP_MAX, MPC_ACC_DOWN_MAX)
     acc_hor: float = 2.0    # 水平最大加速度 (m/s²) - 向量限制

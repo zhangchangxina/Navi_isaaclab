@@ -168,13 +168,13 @@ class CommandsCfg:
     #     offset_z=1.0
     # )
 
-    # 3.在右上角发布目标点
-    pose_command = mdp.UniformPose2dCommandCfg(
+    # 3.在右上角发布目标点 (3D - 随机高度)
+    pose_command = mdp.TerrainBasedPoseCommandCfg(
         asset_name="robot",
-        simple_heading=False,  # True: 目标 heading 自动朝向目标点（雷达倾斜需朝向感知）
         resampling_time_range=(180.0, 180.0),
         debug_vis=True,
-        ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(22.0, 22.0), pos_y=(22.0, 22.0), heading=(1.57, 4.71)),
+        ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 4.0)),  # 目标高度 = 初始高度 + 0~4m
+        offset_z=0.2,  # 目标点z轴偏移
     )
 
 
@@ -315,7 +315,7 @@ class ActionsCfg:
         max_vel_up=_UAV_MAX_VEL_UP,    # 上升最大速度限制
         max_vel_down=_UAV_MAX_VEL_DOWN,  # 下降最大速度限制
         max_yaw_rate=0.5,              # 最大航向角速度 (rad/s) ≈ 29°/s
-        yaw_p_gain=2.0,                # 航向 P 控制器增益
+        yaw_p_gain=1,                # 航向 P 控制器增益
         acc_hor=_UAV_ACC_HOR,          # 水平加速度限制
         acc_up=_UAV_ACC_UP,            # 向上加速度限制
         acc_down=_UAV_ACC_DOWN,        # 向下加速度限制
@@ -484,7 +484,7 @@ class RewardsCfg:
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1)
     
     # 动作幅度惩罚 - 限制动作大小，鼓励高效控制
-    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.5)  
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.2)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(

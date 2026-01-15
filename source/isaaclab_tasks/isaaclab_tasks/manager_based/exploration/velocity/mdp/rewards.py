@@ -192,9 +192,10 @@ def position_command_error_2d(env: ManagerBasedRLEnv, origin_distance: float, co
 
 
 def lidar_depth_min(env: ManagerBasedRLEnv, threshold: float, sensor_cfg = SceneEntityCfg("lidar_scanner")) -> torch.Tensor:
-    """Penalize too close distance to obstacles."""
+    """Penalize too close distance to obstacles (3D distance)."""
     sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
-    depth = torch.norm(sensor.data.ray_hits_w[..., 0:2] - sensor.data.pos_w[:, 0:2].unsqueeze(1), dim=-1)
+    # 3D distance: full ray length from sensor to hit point
+    depth = torch.norm(sensor.data.ray_hits_w - sensor.data.pos_w.unsqueeze(1), dim=-1)
     min_depth, _ = torch.min(depth, dim=-1)
 
     return torch.clamp(threshold - min_depth, min=0)

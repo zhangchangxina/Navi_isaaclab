@@ -482,7 +482,8 @@ class UAVBodyActionWithYaw(BodyAction):
         goal_x_body = pose_command[:, 0]  # 机体系下目标点 x
         goal_y_body = pose_command[:, 1]  # 机体系下目标点 y
         # 目标点方向 (相对于当前机头方向的角度)
-        direction_to_goal_body = torch.atan2(goal_y_body, goal_x_body)
+        # 取负号：修正 yaw 方向（实测发现原逻辑反向）
+        direction_to_goal_body = torch.atan2(-goal_y_body, -goal_x_body)
         
         # 获取物理限制参数
         acc_hor = self.cfg.acc_hor_per_step
@@ -714,7 +715,8 @@ class UAVBodyActionAutoYaw(BodyAction):
         goal_x_body = pose_command[:, 0]  # 机体系下目标点 x
         goal_y_body = pose_command[:, 1]  # 机体系下目标点 y
         # 目标点方向 (相对于当前机头方向的角度)
-        direction_to_goal_body = torch.atan2(goal_y_body, goal_x_body)
+        # 取负号：修正 yaw 方向（实测发现原逻辑反向）
+        direction_to_goal_body = torch.atan2(-goal_y_body, -goal_x_body)
         
         # 获取物理限制参数
         acc_hor = self.cfg.acc_hor_per_step

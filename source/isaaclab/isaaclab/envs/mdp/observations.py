@@ -256,14 +256,14 @@ def height_scan(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg, offset: float 
 
 
 def lidar_scan(env: ManagerBasedEnv, sensor_cfg: SceneEntityCfg, offset: float = 0.5) -> torch.Tensor:
-    """Height scan from the given sensor w.r.t. the sensor's frame.
+    """3D distance scan from the given sensor w.r.t. the sensor's frame.
 
-    The provided offset (Defaults to 0.5) is subtracted from the returned values.
+    Returns the true 3D distance (ray length) from sensor to hit points.
     """
     # extract the used quantities (to enable type-hinting)
     sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
-    # height scan: height = sensor_height - hit_point_z - offset
-    depth = torch.norm(sensor.data.ray_hits_w[..., 0:2] - sensor.data.pos_w[:, 0:2].unsqueeze(1), dim=-1)
+    # 3D distance: full ray length from sensor to hit point
+    depth = torch.norm(sensor.data.ray_hits_w - sensor.data.pos_w.unsqueeze(1), dim=-1)
 
     # optional, return the min distance and corresponding index
     # min_value, min_index = torch.min(depth, keepdim=True, dim=-1)
