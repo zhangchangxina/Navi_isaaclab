@@ -113,8 +113,9 @@ class TerrainBasedPoseCommand(CommandTerm):
         self.pos_command_w[env_ids] = self.valid_targets[
             self.terrain.terrain_levels[env_ids], self.terrain.terrain_types[env_ids], ids
         ]
-        # offset the position command by the current root height
-        self.pos_command_w[env_ids, 2] += self.robot.data.default_root_state[env_ids, 2] + self.cfg.offset_z + r.uniform_(*self.cfg.ranges.pos_z)
+        # 使用绝对高度：terrain_z + offset_z + random(pos_z)
+        # 不再加上机器人初始高度，使目标点高度与机器人初始位置无关
+        self.pos_command_w[env_ids, 2] += self.cfg.offset_z + r.uniform_(*self.cfg.ranges.pos_z)
 
 
 

@@ -110,7 +110,7 @@ class MySceneCfg(InteractiveSceneCfg):
         update_period=1 / 60,
         # offset 由各机器人类型单独配置 (drone/turtlebot)
         mesh_prim_paths=["/World/ground/forest"],
-        ray_alignment='yaw',
+        ray_alignment='body',  # 雷达完全跟随机体姿态 (roll/pitch/yaw)
         # Debug visualization is useful for interactive play, but can break headless training.
         debug_vis=False,
     )
@@ -158,24 +158,23 @@ class CommandsCfg:
     #     ranges=mdp.UniformPose2dCommandCfg.Ranges(pos_x=(25.5, 25.5), pos_y=(-25.0, 25.0), heading=(1.57, 4.71)),
     # )
 
-    # 2.在障碍物区域内部随机发布目标点
-    # pose_command = mdp.TerrainBasedPose2dCommandCfg(
-    #     asset_name="robot",
-    #     simple_heading=False,
-    #     resampling_time_range=(180.0, 180.0),
-    #     debug_vis=True,
-    #     ranges=mdp.TerrainBasedPose2dCommandCfg.Ranges(heading=(-3.14, 3.14)),
-    #     offset_z=1.0
-    # )
-
-    # 3.在右上角发布目标点 (3D - 随机高度)
+    # 2.在障碍物区域内部随机发布目标点 (3D - 随机高度)
     pose_command = mdp.TerrainBasedPoseCommandCfg(
         asset_name="robot",
         resampling_time_range=(180.0, 180.0),
         debug_vis=True,
-        ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 4.0)),  # 目标高度 = 初始高度 + 0~4m
-        offset_z=0.2,  # 目标点z轴偏移
+        ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 4.0)),  
+        offset_z=0.01,  # 目标点z轴偏移
     )
+
+    # 3.在右上角发布目标点 (3D - 随机高度)
+    # pose_command = mdp.TerrainBasedPoseCommandCfg(
+    #     asset_name="robot",
+    #     resampling_time_range=(180.0, 180.0),
+    #     debug_vis=True,
+    #     ranges=mdp.TerrainBasedPoseCommandCfg.Ranges(pos_z=(1.0, 4.0)),  # 目标高度 = 初始高度 + 1~4m
+    #     offset_z=0.01,  # 目标点z轴偏移
+    # )
 
 
     traj_command = mdp.TrajectoryVisCommandCfg(
@@ -481,10 +480,10 @@ class RewardsCfg:
     )
 
     # 动作平滑性惩罚 - 鼓励平滑运动 (训练初期适当降低)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-2)
     
     # 动作幅度惩罚 - 限制动作大小，鼓励高效控制
-    action_l2 = RewTerm(func=mdp.action_l2, weight=-0.2)  
+    action_l2 = RewTerm(func=mdp.action_l2, weight=-1)  
     
     # 目标点附近速度惩罚 - 鼓励UAV减速停稳 (已注释掉)
     # velocity_near_target = RewTerm(
